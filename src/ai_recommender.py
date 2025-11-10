@@ -194,46 +194,47 @@ Humidity: {hourly[0]['humidity']}%"""
         avg_wind = sum(wind_speeds) / len(wind_speeds)
         is_windy = max_wind > 7.0  # m/s
         
-        # Build nicely formatted message with Markdown support
-        message = "🌤️ **Weather Report**\n\n"
+        # Build beautifully formatted message with plain text formatting
+        message = "☀️⛅ Today's Weather\n"
+        message += "Weather Report\n\n"
         
         # Temperature section
-        message += "🌡️ **Temperature**\n"
-        message += f"• Low: **{min_temp:.1f}°C**\n"
-        message += f"• High: **{max_temp:.1f}°C**\n"
-        message += f"• Feels like: **{avg_feels_like:.1f}°C**\n"
-        message += f"  _(Range: {min_feels_like:.1f}°C - {max_feels_like:.1f}°C)_\n\n"
+        message += "🌡️ Temperature\n"
+        message += f"• Low: {min_temp:.1f}°C\n"
+        message += f"• High: {max_temp:.1f}°C\n"
+        message += f"• Feels like: {avg_feels_like:.1f}°C\n"
+        message += f"  (Range: {min_feels_like:.1f}°C - {max_feels_like:.1f}°C)\n\n"
         
         # Rain section
-        message += "🌧️ **Rain**\n"
+        message += "☁️ Rain\n"
         if will_rain:
             if len(rain_hours) > 0:
                 hours_str = ", ".join([f"+{h}h" for h in rain_hours[:5]])
                 if len(rain_hours) > 5:
                     hours_str += f" (+{len(rain_hours)-5} more)"
-                message += f"• ⚠️ **Rain expected**\n"
-                message += f"• Total: **{total_precip:.1f}mm**\n"
-                message += f"• Peak: **{max_precip:.1f}mm**\n"
+                message += "• ⚠️ Rain expected\n"
+                message += f"• Total: {total_precip:.1f}mm\n"
+                message += f"• Peak: {max_precip:.1f}mm\n"
                 message += f"• Hours: {hours_str}\n"
             else:
                 message += f"• ⚠️ Light rain possible ({total_precip:.1f}mm total)\n"
         else:
-            message += "• ✅ **No rain expected**\n"
+            message += "• ✅ No rain expected\n"
         message += "\n"
         
         # Wind section
-        message += "💨 **Wind**\n"
+        message += "🌬️ Wind\n"
         if is_windy:
-            message += f"• ⚠️ **Windy conditions**\n"
+            message += "• ⚠️ Windy conditions\n"
         else:
-            message += f"• ✅ Light winds\n"
-        message += f"• Speed: **{avg_wind:.1f} m/s** (avg)\n"
-        message += f"• Peak: **{max_wind:.1f} m/s**\n"
+            message += "• ✅ Light winds\n"
+        message += f"• Speed: {avg_wind:.1f} m/s (avg)\n"
+        message += f"• Peak: {max_wind:.1f} m/s\n"
         message += "\n"
         
-        # Recommendation
-        message += "👔 **Recommendation**\n"
-        message += f"{recommendation}\n"
+        # Recommendation section
+        message += "👔 Recommendation\n"
+        message += f"{recommendation}"
         
         return message
 
