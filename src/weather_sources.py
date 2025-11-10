@@ -234,10 +234,11 @@ class WeatherSources:
             
             for source_name, source_data in successful_sources.items():
                 if hour_idx < len(source_data):
-                    temps.append(source_data[hour_idx]['temperature'])
-                    precips.append(source_data[hour_idx]['precipitation'])
-                    winds.append(source_data[hour_idx]['wind_speed'])
-                    humidities.append(source_data[hour_idx]['humidity'])
+                    # Convert all numeric values to float to avoid type comparison errors
+                    temps.append(float(source_data[hour_idx]['temperature']))
+                    precips.append(float(source_data[hour_idx]['precipitation']))
+                    winds.append(float(source_data[hour_idx]['wind_speed']))
+                    humidities.append(float(source_data[hour_idx]['humidity']))
                     conditions.append(source_data[hour_idx]['condition'])
             
             # Calculate consensus values
