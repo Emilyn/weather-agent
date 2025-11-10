@@ -223,7 +223,17 @@ class WeatherSources:
         weather_data.reliability_score = len(successful_sources) / 5.0
         
         # Find the minimum number of hours available across all sources
-        min_hours = min(len(data) for data in successful_sources.values())
+        # Ensure all data values are lists and have length
+        source_lengths = []
+        for source_name, source_data in successful_sources.items():
+            if not isinstance(source_data, list):
+                raise Exception(f"Source {source_name} returned invalid data type: {type(source_data)}")
+            source_lengths.append(len(source_data))
+        
+        if not source_lengths:
+            raise Exception("No valid source data available")
+        
+        min_hours = min(source_lengths)
         
         for hour_idx in range(min_hours):
             temps = []
@@ -234,12 +244,36 @@ class WeatherSources:
             
             for source_name, source_data in successful_sources.items():
                 if hour_idx < len(source_data):
-                    # Convert all numeric values to float to avoid type comparison errors
-                    temps.append(float(source_data[hour_idx]['temperature']))
-                    precips.append(float(source_data[hour_idx]['precipitation']))
-                    winds.append(float(source_data[hour_idx]['wind_speed']))
-                    humidities.append(float(source_data[hour_idx]['humidity']))
-                    conditions.append(source_data[hour_idx]['condition'])
+                    try:
+                        hour_data = source_data[hour_idx]
+                        
+                        # Safely convert all numeric values to float, handling None and string values
+                        def safe_float(value, default=0.0):
+                            if value is None:
+                                return default
+                            try:
+                                return float(value)
+                            except (ValueError, TypeError):
+                                return default
+                        
+                        temp_val = safe_float(hour_data.get('temperature'))
+                        precip_val = safe_float(hour_data.get('precipitation'), 0.0)
+                        wind_val = safe_float(hour_data.get('wind_speed'), 0.0)
+                        humidity_val = safe_float(hour_data.get('humidity'), 50.0)
+                        condition_val = hour_data.get('condition', 'Unknown')
+                        
+                        temps.append(temp_val)
+                        precips.append(precip_val)
+                        winds.append(wind_val)
+                        humidities.append(humidity_val)
+                        conditions.append(condition_val)
+                    except Exception as e:
+                        print(f"Warning: Error processing {source_name} hour {hour_idx}: {e}")
+                        continue
+            
+            # Skip if no valid data collected
+            if not temps:
+                continue
             
             # Calculate consensus values
             aggregated_hour = {
@@ -248,7 +282,7 @@ class WeatherSources:
                 'precipitation': round(statistics.median(precips), 1),
                 'wind_speed': round(statistics.median(winds), 1),
                 'humidity': round(statistics.median(humidities), 1),
-                'condition': max(set(conditions), key=conditions.count),  # Most common
+                'condition': max(set(conditions), key=conditions.count) if conditions else 'Unknown',
                 'temp_range': (round(min(temps), 1), round(max(temps), 1))
             }
             

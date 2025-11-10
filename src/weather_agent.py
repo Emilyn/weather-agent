@@ -10,6 +10,18 @@ import requests
 from weather_sources import WeatherSources
 from ai_recommender import AIRecommender
 
+# Try to load .env file if python-dotenv is available
+try:
+    from dotenv import load_dotenv
+    # Load .env file from parent directory (project root)
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+    # Also try loading from current directory
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed, skip .env loading
+
 
 def send_ntfy_notification(topic: str, message: str, title: str = "Weather Alert") -> bool:
     """Send notification via Ntfy.sh."""
