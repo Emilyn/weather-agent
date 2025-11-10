@@ -93,10 +93,21 @@ Example: Paris, France = `48.8566, 2.3522`
 
 ### 5. Configure GitHub Secrets
 
-1. Go to your GitHub repository
-2. Click **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret**
-4. Add the following secrets:
+Follow these steps to add your API keys and configuration as GitHub Secrets:
+
+1. **Navigate to your repository** on GitHub
+2. Click the **Settings** tab (at the top of the repository page)
+3. In the left sidebar, click **Secrets and variables** → **Actions**
+4. Click the **New repository secret** button (green button, top right)
+5. For each secret below:
+   - Enter the **Name** exactly as shown (case-sensitive)
+   - Paste your **Value** in the secret field
+   - Click **Add secret**
+   - Repeat for each secret you need to add
+
+**Required Secrets** (add these first):
+
+6. Add the following secrets one by one:
 
 | Secret Name | Description | Example | Required |
 |------------|-------------|---------|----------|
@@ -112,19 +123,44 @@ Example: Paris, France = `48.8566, 2.3522`
 
 ### 6. Enable GitHub Actions
 
-1. Go to the **Actions** tab in your repository
-2. Click "I understand my workflows, go ahead and enable them"
+1. Go to the **Actions** tab in your repository (top navigation bar)
+2. If you see a message about enabling workflows, click **"I understand my workflows, go ahead and enable them"**
 3. The workflow will now run automatically every day at 6 AM GMT+1
 
-### 7. Test It!
+### 7. Run GitHub Actions (Manual Testing)
 
-Don't wait until tomorrow! Test it now:
+**Don't wait until tomorrow! Test it right now:**
 
-1. Go to **Actions** tab
-2. Click on **Daily Weather Notification** workflow
-3. Click **Run workflow** → **Run workflow**
-4. Wait ~30 seconds
-5. Check your phone for the notification!
+#### Option A: Run from Actions Tab (Recommended)
+
+1. Go to the **Actions** tab in your repository
+2. In the left sidebar, click on **Daily Weather Notification** workflow
+3. Click the **Run workflow** dropdown button (top right)
+4. Select the branch (usually `main` or `master`)
+5. Click the green **Run workflow** button
+6. Wait ~30 seconds for it to complete
+7. Check your phone for the notification! 📱
+
+#### Option B: Check Workflow Status
+
+After triggering a run:
+
+1. You'll see a new workflow run appear in the list
+2. Click on the run to see detailed logs
+3. Watch it progress through:
+   - ✅ Set up Python
+   - ✅ Install dependencies
+   - ✅ Run weather agent
+   - ✅ Send notification
+4. If it shows a green checkmark ✅, it succeeded!
+5. If it shows a red X ❌, click it to see error details
+
+#### Option C: Automatic Scheduled Runs
+
+Once enabled, the workflow runs automatically:
+- **Schedule**: Every day at 6 AM GMT+1 (5 AM UTC)
+- **No action needed**: Just wait for your morning notification!
+- **Check history**: Go to Actions tab to see all past runs
 
 ## 📱 What You'll Receive
 
@@ -262,9 +298,33 @@ python weather_agent.py
 
 ### GitHub Actions Not Running
 
-1. Ensure Actions are enabled in repository settings
-2. Check the workflow file syntax is correct
-3. Verify the cron schedule is in UTC time
+**Workflow won't start:**
+1. Ensure Actions are enabled: Go to **Settings** → **Actions** → **General** → Make sure "Allow all actions" is selected
+2. Check the workflow file exists: `.github/workflows/weather-notification.yml`
+3. Verify the workflow file syntax is correct (YAML format)
+4. Check if you've added all required secrets (see step 5)
+
+**Can't find "Run workflow" button:**
+1. Make sure you're on the **Actions** tab
+2. Click on the workflow name in the left sidebar first
+3. The button should appear at the top right
+4. If it's still missing, the workflow file might not exist yet
+
+**Workflow runs but fails:**
+1. Click on the failed run to see error logs
+2. Check if all required secrets are set correctly
+3. Verify your API keys are valid (not expired)
+4. Check the logs for specific error messages
+5. Common issues:
+   - Missing secrets → Add them in Settings → Secrets
+   - Invalid API keys → Regenerate and update secrets
+   - Network errors → Usually temporary, try again
+
+**Scheduled runs not happening:**
+1. Verify the cron schedule is in UTC time (not your local time)
+2. Check Actions tab for past runs (might have failed silently)
+3. Ensure the repository is active (GitHub pauses workflows on inactive repos)
+4. First scheduled run may take up to 24 hours to start
 
 ## 🔒 Privacy & Security
 
