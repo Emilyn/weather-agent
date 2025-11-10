@@ -194,8 +194,6 @@ Humidity: {hourly[0]['humidity']}%"""
         avg_wind = sum(wind_speeds) / len(wind_speeds)
         is_windy = max_wind > 7.0  # m/s
         
-        # Build beautifully formatted message with plain text formatting
-        message = "☀️⛅ Today's Weather\n"
         
         # Temperature section
         message += "🌡️ Temperature\n"
@@ -234,7 +232,10 @@ Humidity: {hourly[0]['humidity']}%"""
         # Recommendation section
         message += "👔 Recommendation\n"
         message += f"{recommendation}"
-        
+        message += "                \n"
+        message += "Have a great day!"
+        message += "                \n"
+        message += "                \n"
         return message
 
 
