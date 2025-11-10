@@ -196,7 +196,6 @@ Humidity: {hourly[0]['humidity']}%"""
         
         # Build beautifully formatted message with plain text formatting
         message = "☀️⛅ Today's Weather\n"
-        message += "Weather Report\n\n"
         
         # Temperature section
         message += "🌡️ Temperature\n"
