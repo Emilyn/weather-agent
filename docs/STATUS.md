@@ -226,7 +226,7 @@
 
 ### Notification Example
 ```
-🌤️ Good Morning! Weather Report
+🌤️ Good Morning!
 ===================================
 
 📊 Next 10 Hours Summary:

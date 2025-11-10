@@ -1,6 +1,6 @@
 """
 AI-powered clothing recommendation engine.
-Uses free AI APIs (Groq/Hugging Face) with fallback to rule-based logic.
+Uses free AI APIs (Groq/Hugging Face) - requires at least one API key.
 """
 
 import os
@@ -9,26 +9,27 @@ import json
 
 
 class AIRecommender:
-    """Generate clothing recommendations using AI or rule-based logic."""
+    """Generate clothing recommendations using AI (requires Groq or Hugging Face API key)."""
     
     def __init__(self, groq_api_key: Optional[str] = None, hf_api_key: Optional[str] = None):
         self.groq_api_key = groq_api_key
         self.hf_api_key = hf_api_key
-        self.use_ai = bool(groq_api_key or hf_api_key)
+        
+        if not groq_api_key and not hf_api_key:
+            raise ValueError(
+                "At least one API key is required. Please provide either GROQ_API_KEY or HUGGINGFACE_API_KEY."
+            )
     
     def generate_recommendation(self, weather_data: Dict) -> str:
-        """Generate clothing recommendation based on weather data."""
-        if self.use_ai:
-            try:
-                if self.groq_api_key:
-                    return self._generate_with_groq(weather_data)
-                elif self.hf_api_key:
-                    return self._generate_with_huggingface(weather_data)
-            except Exception as e:
-                print(f"AI generation failed: {e}, falling back to rule-based")
-        
-        # Fallback to rule-based logic
-        return self._generate_rule_based(weather_data)
+        """Generate clothing recommendation based on weather data using AI."""
+        try:
+            if self.groq_api_key:
+                return self._generate_with_groq(weather_data)
+            elif self.hf_api_key:
+                return self._generate_with_huggingface(weather_data)
+        except Exception as e:
+            print(f"AI generation failed: {e}")
+            raise RuntimeError(f"Failed to generate recommendation with AI: {e}") from e
     
     def _generate_with_groq(self, weather_data: Dict) -> str:
         """Generate recommendation using Groq API with Llama."""
@@ -135,60 +136,6 @@ Wind: up to {max_wind:.1f} m/s
 Humidity: {hourly[0]['humidity']}%"""
         
         return summary
-    
-    def _generate_rule_based(self, weather_data: Dict) -> str:
-        """Generate recommendation using rule-based logic."""
-        hourly = weather_data['hourly_data']
-        
-        # Analyze weather
-        temps = [h['temperature'] for h in hourly]
-        min_temp = min(temps)
-        max_temp = max(temps)
-        avg_temp = sum(temps) / len(temps)
-        
-        total_precip = sum(h['precipitation'] for h in hourly)
-        will_rain = total_precip > 1.0
-        
-        max_wind = max(h['wind_speed'] for h in hourly)
-        is_windy = max_wind > 8.0
-        
-        # Build recommendation
-        recommendation = []
-        
-        # Temperature-based clothing
-        if avg_temp < 0:
-            recommendation.append("🧥 Heavy winter coat, thermal layers, gloves, and a warm hat")
-        elif avg_temp < 10:
-            recommendation.append("🧥 Warm jacket or coat, long sleeves, and a scarf")
-        elif avg_temp < 15:
-            recommendation.append("🧥 Light jacket or sweater")
-        elif avg_temp < 20:
-            recommendation.append("👕 Long sleeves or a light sweater")
-        elif avg_temp < 25:
-            recommendation.append("👕 T-shirt or light clothing")
-        else:
-            recommendation.append("👕 Light, breathable clothing, stay hydrated")
-        
-        # Precipitation
-        if will_rain:
-            if total_precip > 5:
-                recommendation.append("☔ Umbrella and waterproof jacket essential")
-            else:
-                recommendation.append("☔ Bring an umbrella or rain jacket")
-        
-        # Wind
-        if is_windy:
-            recommendation.append("💨 Windproof outer layer recommended")
-        
-        # Temperature variation
-        if max_temp - min_temp > 8:
-            recommendation.append("🌡️ Temperature varies - dress in layers")
-        
-        # Build final message
-        intro = f"Temperature: {min_temp}°C to {max_temp}°C. "
-        advice = " • ".join(recommendation)
-        
-        return intro + advice
     
     def _calculate_feels_like(self, temp: float, humidity: float, wind_speed: float) -> float:
         """Calculate 'feels like' temperature using wind chill and heat index formulas."""

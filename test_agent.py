@@ -35,7 +35,7 @@ def test_environment():
     """Test if required environment variables are set."""
     print("\n🔧 Testing environment variables...")
     required = ['LOCATION_LAT', 'LOCATION_LON', 'NTFY_TOPIC']
-    optional = ['GROQ_API_KEY', 'HUGGINGFACE_API_KEY', 'WEATHERAPI_KEY', 'OPENWEATHER_KEY']
+    optional = ['WEATHERAPI_KEY', 'OPENWEATHER_KEY']
     
     all_ok = True
     for var in required:
@@ -52,7 +52,8 @@ def test_environment():
             has_ai_key = True
     
     if not has_ai_key:
-        print(f"   ⚠️  No AI API key set (will use rule-based recommendations)")
+        print(f"   ❌ No AI API key set (GROQ_API_KEY or HUGGINGFACE_API_KEY is required)")
+        all_ok = False
     
     for var in ['WEATHERAPI_KEY', 'OPENWEATHER_KEY']:
         if os.getenv(var):

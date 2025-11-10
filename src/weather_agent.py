@@ -73,6 +73,10 @@ def main():
         print("❌ ERROR: NTFY_TOPIC must be set")
         sys.exit(1)
     
+    if not groq_api_key and not hf_api_key:
+        print("❌ ERROR: At least one AI API key is required (GROQ_API_KEY or HUGGINGFACE_API_KEY)")
+        sys.exit(1)
+    
     try:
         lat = float(lat)
         lon = float(lon)
@@ -112,10 +116,10 @@ def main():
             hf_api_key=hf_api_key
         )
         
-        if ai_recommender.use_ai:
-            print("   Using AI-powered recommendations")
-        else:
-            print("   Using rule-based recommendations (no AI API key provided)")
+        if groq_api_key:
+            print("   Using Groq AI (Llama 3.1)")
+        elif hf_api_key:
+            print("   Using Hugging Face AI (Mistral-7B)")
         
         recommendation = ai_recommender.generate_recommendation(weather_data.to_dict())
         
@@ -147,7 +151,7 @@ def main():
         success = send_ntfy_notification(
             topic=ntfy_topic,
             message=full_message,
-            title="Morning Weather Report"
+            title="Today's Weather"
         )
         
         if not success:
