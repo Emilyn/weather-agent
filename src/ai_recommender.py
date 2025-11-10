@@ -194,6 +194,8 @@ Humidity: {hourly[0]['humidity']}%"""
         avg_wind = sum(wind_speeds) / len(wind_speeds)
         is_windy = max_wind > 7.0  # m/s
         
+        # Initialize message
+        message = ""
         
         # Temperature section
         message += "🌡️ Temperature\n"
