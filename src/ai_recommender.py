@@ -231,9 +231,9 @@ Humidity: {hourly[0]['humidity']}%"""
         
         # Recommendation section
         message += "👔 Recommendation\n"
-        message += f"{recommendation}"
+        message += f"{recommendation}\n"
         message += "                \n"
-        message += "Have a great day!"
+        message += "Have a great day!\n"
         message += "                \n"
         message += "                \n"
         return message
