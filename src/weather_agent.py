@@ -135,7 +135,7 @@ def main():
         success = send_ntfy_notification(
             topic=ntfy_topic,
             message=full_message,
-            title="☀️ Morning Weather Report"
+            title="Morning Weather Report"
         )
         
         if not success:
