@@ -8,6 +8,7 @@ import statistics
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import json
+import math
 
 
 class WeatherData:
@@ -17,12 +18,14 @@ class WeatherData:
         self.hourly_data = []  # List of hourly forecasts
         self.sources_used = []
         self.reliability_score = 0.0
+        self.source_consistency_scores = {}  # Track how consistent each source is
     
     def to_dict(self):
         return {
             'hourly_data': self.hourly_data,
             'sources_used': self.sources_used,
-            'reliability_score': self.reliability_score
+            'reliability_score': self.reliability_score,
+            'source_consistency_scores': self.source_consistency_scores
         }
 
 
@@ -36,6 +39,16 @@ class WeatherSources:
         self.weatherapi_key = weatherapi_key
         self.openweather_key = openweather_key
         self.timeout = 10
+        
+        # Source reliability weights (based on typical API quality)
+        # Higher weight = more reliable source
+        self.source_weights = {
+            'Open-Meteo': 1.0,      # High quality, free, no key needed
+            'WeatherAPI': 1.2,       # Commercial API, generally accurate
+            'OpenWeatherMap': 1.1,   # Well-established, reliable
+            '7Timer': 0.8,           # Free but less detailed
+            'wttr.in': 0.9           # Good coverage, free
+        }
     
     def fetch_open_meteo(self) -> Optional[List[Dict]]:
         """Fetch from Open-Meteo (no API key needed)."""
@@ -196,8 +209,154 @@ class WeatherSources:
             print(f"wttr.in error: {e}")
             return None
     
+    def _remove_outliers(self, values: List[float], method: str = 'iqr') -> List[float]:
+        """Remove outliers from a list of values using IQR method."""
+        if len(values) < 3:
+            return values
+        
+        sorted_vals = sorted(values)
+        q1 = statistics.median(sorted_vals[:len(sorted_vals)//2])
+        q3 = statistics.median(sorted_vals[len(sorted_vals)//2:])
+        iqr = q3 - q1
+        
+        if iqr == 0:
+            return values  # No spread, return all values
+        
+        lower_bound = q1 - 1.5 * iqr
+        upper_bound = q3 + 1.5 * iqr
+        
+        return [v for v in values if lower_bound <= v <= upper_bound]
+    
+    def _trimmed_mean(self, values: List[float], trim_percent: float = 0.1) -> float:
+        """Calculate trimmed mean (removes extreme values)."""
+        if len(values) < 3:
+            return statistics.mean(values) if values else 0.0
+        
+        sorted_vals = sorted(values)
+        trim_count = max(1, int(len(sorted_vals) * trim_percent))
+        trimmed = sorted_vals[trim_count:-trim_count] if trim_count > 0 else sorted_vals
+        
+        return statistics.mean(trimmed) if trimmed else statistics.mean(values)
+    
+    def _weighted_median(self, values: List[float], weights: List[float]) -> float:
+        """Calculate weighted median."""
+        if not values or not weights or len(values) != len(weights):
+            return statistics.median(values) if values else 0.0
+        
+        # Normalize weights
+        total_weight = sum(weights)
+        if total_weight == 0:
+            return statistics.median(values)
+        
+        normalized_weights = [w / total_weight for w in weights]
+        
+        # Create pairs and sort by value
+        pairs = list(zip(values, normalized_weights))
+        pairs.sort(key=lambda x: x[0])
+        
+        # Find median position
+        cumulative = 0.0
+        for value, weight in pairs:
+            cumulative += weight
+            if cumulative >= 0.5:
+                return value
+        
+        return pairs[-1][0] if pairs else 0.0
+    
+    def _weighted_mean(self, values: List[float], weights: List[float]) -> float:
+        """Calculate weighted mean."""
+        if not values or not weights or len(values) != len(weights):
+            return statistics.mean(values) if values else 0.0
+        
+        total_weight = sum(weights)
+        if total_weight == 0:
+            return statistics.mean(values)
+        
+        return sum(v * w for v, w in zip(values, weights)) / total_weight
+    
+    def _calculate_confidence_interval(self, values: List[float], confidence: float = 0.95) -> Tuple[float, float]:
+        """Calculate confidence interval for values."""
+        if len(values) < 2:
+            return (values[0] if values else 0.0, values[0] if values else 0.0)
+        
+        mean_val = statistics.mean(values)
+        if len(values) == 1:
+            return (mean_val, mean_val)
+        
+        try:
+            stdev = statistics.stdev(values)
+            # Use t-distribution approximation (simplified for n>=2)
+            # For 95% confidence, approximate multiplier
+            n = len(values)
+            if n >= 30:
+                multiplier = 1.96  # Normal distribution
+            elif n >= 10:
+                multiplier = 2.0   # Conservative estimate
+            else:
+                multiplier = 2.5   # More conservative for small samples
+            
+            margin = multiplier * stdev / math.sqrt(n)
+            return (mean_val - margin, mean_val + margin)
+        except:
+            return (min(values), max(values))
+    
+    def _calculate_source_consistency(self, all_source_data: Dict[str, List[Dict]], 
+                                     num_hours: int) -> Dict[str, float]:
+        """Calculate how consistent each source is with others."""
+        consistency_scores = {}
+        
+        for source_name in all_source_data.keys():
+            deviations = []
+            
+            for hour_idx in range(num_hours):
+                source_vals = {}
+                for name, data in all_source_data.items():
+                    if hour_idx < len(data):
+                        try:
+                            source_vals[name] = {
+                                'temp': float(data[hour_idx].get('temperature', 0)),
+                                'precip': float(data[hour_idx].get('precipitation', 0)),
+                                'wind': float(data[hour_idx].get('wind_speed', 0)),
+                                'humidity': float(data[hour_idx].get('humidity', 50))
+                            }
+                        except:
+                            continue
+                
+                if source_name not in source_vals or len(source_vals) < 2:
+                    continue
+                
+                # Calculate average of all other sources
+                other_sources = {k: v for k, v in source_vals.items() if k != source_name}
+                if not other_sources:
+                    continue
+                
+                avg_temp = statistics.mean([v['temp'] for v in other_sources.values()])
+                avg_precip = statistics.mean([v['precip'] for v in other_sources.values()])
+                avg_wind = statistics.mean([v['wind'] for v in other_sources.values()])
+                avg_humidity = statistics.mean([v['humidity'] for v in other_sources.values()])
+                
+                # Calculate normalized deviation
+                source_val = source_vals[source_name]
+                temp_dev = abs(source_val['temp'] - avg_temp) / max(abs(avg_temp), 1.0)
+                precip_dev = abs(source_val['precip'] - avg_precip) / max(avg_precip + 0.1, 0.1)
+                wind_dev = abs(source_val['wind'] - avg_wind) / max(avg_wind + 0.1, 0.1)
+                humidity_dev = abs(source_val['humidity'] - avg_humidity) / 100.0
+                
+                # Combined deviation (lower is better)
+                combined_dev = (temp_dev + precip_dev + wind_dev + humidity_dev) / 4.0
+                deviations.append(combined_dev)
+            
+            if deviations:
+                # Consistency score: 1.0 = perfect, 0.0 = very inconsistent
+                avg_deviation = statistics.mean(deviations)
+                consistency_scores[source_name] = max(0.0, 1.0 - min(avg_deviation, 1.0))
+            else:
+                consistency_scores[source_name] = 0.5  # Default if can't calculate
+        
+        return consistency_scores
+    
     def aggregate_weather_data(self) -> WeatherData:
-        """Fetch from all sources and aggregate the results."""
+        """Fetch from all sources and aggregate the results with improved accuracy."""
         print("Fetching weather data from multiple sources...")
         
         # Fetch from all sources in parallel (simulated with sequential calls)
@@ -223,7 +382,6 @@ class WeatherSources:
         weather_data.reliability_score = len(successful_sources) / 5.0
         
         # Find the minimum number of hours available across all sources
-        # Ensure all data values are lists and have length
         source_lengths = []
         for source_name, source_data in successful_sources.items():
             if not isinstance(source_data, list):
@@ -235,8 +393,14 @@ class WeatherSources:
         
         min_hours = min(source_lengths)
         
+        # Calculate source consistency scores
+        consistency_scores = self._calculate_source_consistency(successful_sources, min_hours)
+        weather_data.source_consistency_scores = consistency_scores
+        
+        print(f"Source consistency scores: {consistency_scores}")
+        
         for hour_idx in range(min_hours):
-            temps = []
+            temp_data = []  # List of (value, weight) tuples
             precips = []
             winds = []
             humidities = []
@@ -262,28 +426,83 @@ class WeatherSources:
                         humidity_val = safe_float(hour_data.get('humidity'), 50.0)
                         condition_val = hour_data.get('condition', 'Unknown')
                         
-                        temps.append(temp_val)
-                        precips.append(precip_val)
-                        winds.append(wind_val)
-                        humidities.append(humidity_val)
+                        # Validate reasonable ranges and store with weights
+                        if -50 <= temp_val <= 60:  # Reasonable temperature range
+                            # Weight = base weight * consistency score
+                            base_weight = self.source_weights.get(source_name, 1.0)
+                            consistency = consistency_scores.get(source_name, 0.5)
+                            weight = base_weight * consistency
+                            temp_data.append((temp_val, weight))
+                        
+                        if 0 <= precip_val <= 500:  # Reasonable precipitation (mm)
+                            precips.append(precip_val)
+                        
+                        if 0 <= wind_val <= 100:  # Reasonable wind speed (m/s)
+                            winds.append(wind_val)
+                        
+                        if 0 <= humidity_val <= 100:  # Humidity percentage
+                            humidities.append(humidity_val)
+                        
                         conditions.append(condition_val)
                     except Exception as e:
                         print(f"Warning: Error processing {source_name} hour {hour_idx}: {e}")
                         continue
             
             # Skip if no valid data collected
-            if not temps:
+            if not temp_data:
                 continue
             
-            # Calculate consensus values
+            # Extract temps and weights separately for outlier removal
+            temps = [t[0] for t in temp_data]
+            temp_weights = [t[1] for t in temp_data]
+            
+            # Remove outliers for more accurate aggregation
+            temps_clean = self._remove_outliers(temps)
+            precips_clean = self._remove_outliers(precips)
+            winds_clean = self._remove_outliers(winds)
+            humidities_clean = self._remove_outliers(humidities)
+            
+            # Match weights to cleaned temps (keep weights for values that weren't removed)
+            if len(temps_clean) < len(temps):
+                # Rebuild temp_data with cleaned values
+                temp_data_clean = [(t, w) for t, w in zip(temps, temp_weights) if t in temps_clean]
+                temps_clean = [t[0] for t in temp_data_clean]
+                temp_weights_clean = [t[1] for t in temp_data_clean]
+            else:
+                temp_weights_clean = temp_weights
+            
+            # Use weighted median for temperature (most robust with weights)
+            # Fall back to trimmed mean if we don't have enough data
+            if len(temps_clean) >= 2 and len(temp_weights_clean) == len(temps_clean):
+                temp_final = self._weighted_median(temps_clean, temp_weights_clean)
+            else:
+                temp_final = self._trimmed_mean(temps_clean if temps_clean else temps)
+            
+            precip_final = self._trimmed_mean(precips_clean if precips_clean else precips) if precips else 0.0
+            wind_final = self._trimmed_mean(winds_clean if winds_clean else winds) if winds else 0.0
+            humidity_final = self._trimmed_mean(humidities_clean if humidities_clean else humidities) if humidities else 50.0
+            
+            # Calculate confidence intervals
+            temp_ci = self._calculate_confidence_interval(temps_clean if temps_clean else temps)
+            precip_ci = self._calculate_confidence_interval(precips_clean if precips_clean else precips) if precips else (0.0, 0.0)
+            wind_ci = self._calculate_confidence_interval(winds_clean if winds_clean else winds) if winds else (0.0, 0.0)
+            humidity_ci = self._calculate_confidence_interval(humidities_clean if humidities_clean else humidities) if humidities else (50.0, 50.0)
+            
+            # Calculate standard deviation for uncertainty measure
+            temp_std = statistics.stdev(temps_clean if temps_clean else temps) if len(temps) > 1 else 0.0
+            
+            # Calculate consensus values with improved accuracy
             aggregated_hour = {
                 'hour': hour_idx,
-                'temperature': round(statistics.median(temps), 1),
-                'precipitation': round(statistics.median(precips), 1),
-                'wind_speed': round(statistics.median(winds), 1),
-                'humidity': round(statistics.median(humidities), 1),
+                'temperature': round(temp_final, 1),
+                'precipitation': round(precip_final, 2),
+                'wind_speed': round(wind_final, 1),
+                'humidity': round(humidity_final, 1),
                 'condition': max(set(conditions), key=conditions.count) if conditions else 'Unknown',
-                'temp_range': (round(min(temps), 1), round(max(temps), 1))
+                'temp_range': (round(min(temps), 1), round(max(temps), 1)),
+                'temp_confidence': (round(temp_ci[0], 1), round(temp_ci[1], 1)),
+                'temp_uncertainty': round(temp_std, 1),
+                'sources_count': len(temps)
             }
             
             weather_data.hourly_data.append(aggregated_hour)
