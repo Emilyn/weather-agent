@@ -6,9 +6,10 @@ Aggregates data from 5 different weather APIs for reliability.
 import requests
 import statistics
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Callable
 import json
 import math
+from utils import fetch_api_data, safe_float, kmh_to_ms
 
 
 class WeatherData:
@@ -50,164 +51,184 @@ class WeatherSources:
             'wttr.in': 0.9           # Good coverage, free
         }
     
+    def _process_hourly_data(
+        self,
+        data_items: List,
+        extractor: Callable[[any], Dict],
+        max_items: int = 10,
+        filter_func: Optional[Callable] = None
+    ) -> List[Dict]:
+        """Generic function to process hourly data from any source."""
+        hourly_data = []
+        for item in data_items:
+            if filter_func and not filter_func(item):
+                continue
+            if len(hourly_data) >= max_items:
+                break
+            hourly_data.append(extractor(item))
+        return hourly_data
+    
     def fetch_open_meteo(self) -> Optional[List[Dict]]:
         """Fetch from Open-Meteo (no API key needed)."""
-        try:
-            url = "https://api.open-meteo.com/v1/forecast"
-            params = {
+        data = fetch_api_data(
+            url="https://api.open-meteo.com/v1/forecast",
+            params={
                 'latitude': self.lat,
                 'longitude': self.lon,
                 'hourly': 'temperature_2m,precipitation,windspeed_10m,relativehumidity_2m,weathercode',
                 'forecast_days': 1,
                 'timezone': 'auto'
-            }
-            response = requests.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            data = response.json()
-            
-            hourly_data = []
-            current_hour = datetime.now().hour
-            
-            for i in range(current_hour, min(current_hour + 10, len(data['hourly']['time']))):
-                hourly_data.append({
-                    'time': data['hourly']['time'][i],
-                    'temperature': data['hourly']['temperature_2m'][i],
-                    'precipitation': data['hourly']['precipitation'][i],
-                    'wind_speed': data['hourly']['windspeed_10m'][i],
-                    'humidity': data['hourly']['relativehumidity_2m'][i],
-                    'condition': self._decode_wmo_code(data['hourly']['weathercode'][i])
-                })
-            
-            return hourly_data[:10]
-        except Exception as e:
-            print(f"Open-Meteo error: {e}")
+            },
+            timeout=self.timeout,
+            source_name="Open-Meteo"
+        )
+        if not data:
             return None
+        
+        current_hour = datetime.now().hour
+        hourly_items = list(zip(
+            data['hourly']['time'][current_hour:current_hour+10],
+            data['hourly']['temperature_2m'][current_hour:current_hour+10],
+            data['hourly']['precipitation'][current_hour:current_hour+10],
+            data['hourly']['windspeed_10m'][current_hour:current_hour+10],
+            data['hourly']['relativehumidity_2m'][current_hour:current_hour+10],
+            data['hourly']['weathercode'][current_hour:current_hour+10]
+        ))
+        
+        return self._process_hourly_data(
+            hourly_items,
+            lambda item: {
+                'time': item[0],
+                'temperature': item[1],
+                'precipitation': item[2],
+                'wind_speed': item[3],
+                'humidity': item[4],
+                'condition': self._decode_wmo_code(item[5])
+            },
+            max_items=10
+        )
     
     def fetch_weatherapi(self) -> Optional[List[Dict]]:
         """Fetch from WeatherAPI.com (free tier)."""
         if not self.weatherapi_key:
             return None
         
-        try:
-            url = "http://api.weatherapi.com/v1/forecast.json"
-            params = {
+        data = fetch_api_data(
+            url="http://api.weatherapi.com/v1/forecast.json",
+            params={
                 'key': self.weatherapi_key,
                 'q': f"{self.lat},{self.lon}",
                 'hours': 24,
                 'aqi': 'no'
-            }
-            response = requests.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            data = response.json()
-            
-            hourly_data = []
-            current_time = datetime.now()
-            
-            for hour in data['forecast']['forecastday'][0]['hour']:
-                hour_time = datetime.strptime(hour['time'], '%Y-%m-%d %H:%M')
-                if hour_time >= current_time and len(hourly_data) < 10:
-                    hourly_data.append({
-                        'time': hour['time'],
-                        'temperature': hour['temp_c'],
-                        'precipitation': hour['precip_mm'],
-                        'wind_speed': hour['wind_kph'] / 3.6,  # Convert to m/s
-                        'humidity': hour['humidity'],
-                        'condition': hour['condition']['text']
-                    })
-            
-            return hourly_data
-        except Exception as e:
-            print(f"WeatherAPI error: {e}")
+            },
+            timeout=self.timeout,
+            source_name="WeatherAPI"
+        )
+        if not data:
             return None
+        
+        current_time = datetime.now()
+        hours = data['forecast']['forecastday'][0]['hour']
+        
+        return self._process_hourly_data(
+            hours,
+            lambda hour: {
+                'time': hour['time'],
+                'temperature': hour['temp_c'],
+                'precipitation': hour['precip_mm'],
+                'wind_speed': kmh_to_ms(hour['wind_kph']),
+                'humidity': hour['humidity'],
+                'condition': hour['condition']['text']
+            },
+            max_items=10,
+            filter_func=lambda hour: datetime.strptime(hour['time'], '%Y-%m-%d %H:%M') >= current_time
+        )
     
     def fetch_openweathermap(self) -> Optional[List[Dict]]:
         """Fetch from OpenWeatherMap (free tier)."""
         if not self.openweather_key:
             return None
         
-        try:
-            url = "https://api.openweathermap.org/data/2.5/forecast"
-            params = {
+        data = fetch_api_data(
+            url="https://api.openweathermap.org/data/2.5/forecast",
+            params={
                 'lat': self.lat,
                 'lon': self.lon,
                 'appid': self.openweather_key,
                 'units': 'metric',
                 'cnt': 10
-            }
-            response = requests.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            data = response.json()
-            
-            hourly_data = []
-            for item in data['list'][:10]:
-                hourly_data.append({
-                    'time': item['dt_txt'],
-                    'temperature': item['main']['temp'],
-                    'precipitation': item.get('rain', {}).get('3h', 0) / 3,  # Convert 3h to 1h avg
-                    'wind_speed': item['wind']['speed'],
-                    'humidity': item['main']['humidity'],
-                    'condition': item['weather'][0]['description']
-                })
-            
-            return hourly_data
-        except Exception as e:
-            print(f"OpenWeatherMap error: {e}")
+            },
+            timeout=self.timeout,
+            source_name="OpenWeatherMap"
+        )
+        if not data:
             return None
+        
+        return self._process_hourly_data(
+            data['list'],
+            lambda item: {
+                'time': item['dt_txt'],
+                'temperature': item['main']['temp'],
+                'precipitation': item.get('rain', {}).get('3h', 0) / 3,  # Convert 3h to 1h avg
+                'wind_speed': item['wind']['speed'],
+                'humidity': item['main']['humidity'],
+                'condition': item['weather'][0]['description']
+            },
+            max_items=10
+        )
     
     def fetch_7timer(self) -> Optional[List[Dict]]:
         """Fetch from 7Timer (no API key needed)."""
-        try:
-            url = "http://www.7timer.info/bin/api.pl"
-            params = {
+        data = fetch_api_data(
+            url="http://www.7timer.info/bin/api.pl",
+            params={
                 'lon': self.lon,
                 'lat': self.lat,
                 'product': 'civil',
                 'output': 'json'
-            }
-            response = requests.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            data = response.json()
-            
-            hourly_data = []
-            for item in data['dataseries'][:10]:
-                hourly_data.append({
-                    'time': str(item['timepoint']),
-                    'temperature': item['temp2m'],
-                    'precipitation': self._estimate_precip_from_weather(item['weather']),
-                    'wind_speed': item['wind10m']['speed'] * 0.277778,  # km/h to m/s
-                    'humidity': item.get('rh2m', 50),
-                    'condition': item['weather']
-                })
-            
-            return hourly_data
-        except Exception as e:
-            print(f"7Timer error: {e}")
+            },
+            timeout=self.timeout,
+            source_name="7Timer"
+        )
+        if not data:
             return None
+        
+        return self._process_hourly_data(
+            data['dataseries'],
+            lambda item: {
+                'time': str(item['timepoint']),
+                'temperature': item['temp2m'],
+                'precipitation': self._estimate_precip_from_weather(item['weather']),
+                'wind_speed': kmh_to_ms(item['wind10m']['speed']),  # Convert km/h to m/s (speed is already in km/h)
+                'humidity': item.get('rh2m', 50),
+                'condition': item['weather']
+            },
+            max_items=10
+        )
     
     def fetch_wttr(self) -> Optional[List[Dict]]:
         """Fetch from wttr.in (no API key needed)."""
-        try:
-            url = f"https://wttr.in/{self.lat},{self.lon}"
-            params = {'format': 'j1'}
-            response = requests.get(url, params=params, timeout=self.timeout)
-            response.raise_for_status()
-            data = response.json()
-            
-            hourly_data = []
-            for hour in data['weather'][0]['hourly'][:10]:
-                hourly_data.append({
-                    'time': hour['time'],
-                    'temperature': float(hour['tempC']),
-                    'precipitation': float(hour['precipMM']),
-                    'wind_speed': float(hour['windspeedKmph']) / 3.6,  # Convert to m/s
-                    'humidity': float(hour['humidity']),
-                    'condition': hour['weatherDesc'][0]['value']
-                })
-            
-            return hourly_data
-        except Exception as e:
-            print(f"wttr.in error: {e}")
+        data = fetch_api_data(
+            url=f"https://wttr.in/{self.lat},{self.lon}",
+            params={'format': 'j1'},
+            timeout=self.timeout,
+            source_name="wttr.in"
+        )
+        if not data:
             return None
+        
+        return self._process_hourly_data(
+            data['weather'][0]['hourly'],
+            lambda hour: {
+                'time': hour['time'],
+                'temperature': safe_float(hour['tempC']),
+                'precipitation': safe_float(hour['precipMM']),
+                'wind_speed': kmh_to_ms(safe_float(hour['windspeedKmph'])),
+                'humidity': safe_float(hour['humidity']),
+                'condition': hour['weatherDesc'][0]['value']
+            },
+            max_items=10
+        )
     
     def _remove_outliers(self, values: List[float], method: str = 'iqr') -> List[float]:
         """Remove outliers from a list of values using IQR method."""
@@ -412,14 +433,6 @@ class WeatherSources:
                         hour_data = source_data[hour_idx]
                         
                         # Safely convert all numeric values to float, handling None and string values
-                        def safe_float(value, default=0.0):
-                            if value is None:
-                                return default
-                            try:
-                                return float(value)
-                            except (ValueError, TypeError):
-                                return default
-                        
                         temp_val = safe_float(hour_data.get('temperature'))
                         precip_val = safe_float(hour_data.get('precipitation'), 0.0)
                         wind_val = safe_float(hour_data.get('wind_speed'), 0.0)

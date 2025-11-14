@@ -9,18 +9,11 @@ import sys
 import requests
 from weather_sources import WeatherSources
 from ai_recommender import AIRecommender
-
-# Try to load .env file if python-dotenv is available
-try:
-    from dotenv import load_dotenv
-    # Load .env file from parent directory (project root)
-    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
-    if os.path.exists(env_path):
-        load_dotenv(env_path)
-    # Also try loading from current directory
-    load_dotenv()
-except ImportError:
-    pass  # python-dotenv not installed, skip .env loading
+from reflection_engine import ReflectionEngine
+from utils import (
+    load_env_file, validate_coordinates, validate_required_env_vars,
+    print_success, print_error, print_warning
+)
 
 
 def send_ntfy_notification(topic: str, message: str, title: str = "Weather Alert") -> bool:
@@ -40,11 +33,11 @@ def send_ntfy_notification(topic: str, message: str, title: str = "Weather Alert
         )
         
         response.raise_for_status()
-        print(f"✅ Notification sent successfully to topic: {topic}")
+        print_success(f"Notification sent successfully to topic: {topic}")
         return True
     
     except Exception as e:
-        print(f"❌ Failed to send notification: {e}")
+        print_error(f"Failed to send notification: {e}")
         return False
 
 
@@ -53,10 +46,23 @@ def main():
     print("🌤️  Weather AI Agent Starting...")
     print("=" * 50)
     
-    # Load configuration from environment variables
-    lat = os.getenv('LOCATION_LAT')
-    lon = os.getenv('LOCATION_LON')
-    ntfy_topic = os.getenv('NTFY_TOPIC')
+    # Load .env file
+    load_env_file()
+    
+    # Validate required environment variables
+    required_vars = ['LOCATION_LAT', 'LOCATION_LON', 'NTFY_TOPIC']
+    env_vars = validate_required_env_vars(required_vars)
+    
+    lat_str = env_vars['LOCATION_LAT']
+    lon_str = env_vars['LOCATION_LON']
+    ntfy_topic = env_vars['NTFY_TOPIC']
+    
+    # Validate coordinates
+    try:
+        lat, lon = validate_coordinates(lat_str, lon_str)
+    except ValueError as e:
+        print_error(str(e))
+        sys.exit(1)
     
     # Optional API keys
     weatherapi_key = os.getenv('WEATHERAPI_KEY')
@@ -64,28 +70,16 @@ def main():
     groq_api_key = os.getenv('GROQ_API_KEY')
     hf_api_key = os.getenv('HUGGINGFACE_API_KEY')
     
-    # Validate required configuration
-    if not lat or not lon:
-        print("❌ ERROR: LOCATION_LAT and LOCATION_LON must be set")
-        sys.exit(1)
-    
-    if not ntfy_topic:
-        print("❌ ERROR: NTFY_TOPIC must be set")
-        sys.exit(1)
-    
+    # Validate at least one AI API key is present
     if not groq_api_key and not hf_api_key:
-        print("❌ ERROR: At least one AI API key is required (GROQ_API_KEY or HUGGINGFACE_API_KEY)")
-        sys.exit(1)
-    
-    try:
-        lat = float(lat)
-        lon = float(lon)
-    except ValueError:
-        print("❌ ERROR: LOCATION_LAT and LOCATION_LON must be valid numbers")
+        print_error("At least one AI API key is required (GROQ_API_KEY or HUGGINGFACE_API_KEY)")
         sys.exit(1)
     
     print(f"📍 Location: {lat}, {lon}")
     print(f"📱 Notification topic: {ntfy_topic}")
+    
+    # Initialize reflection engine
+    reflection_engine = ReflectionEngine(quality_threshold=0.7)
     
     # Step 1: Fetch weather data from multiple sources
     print("\n🌐 Step 1: Fetching weather data...")
@@ -99,16 +93,27 @@ def main():
         
         weather_data = weather_sources.aggregate_weather_data()
         
-        print(f"✅ Weather data aggregated successfully")
+        print_success("Weather data aggregated successfully")
         print(f"   Sources used: {len(weather_data.sources_used)}")
         print(f"   Reliability: {weather_data.reliability_score * 100:.0f}%")
         print(f"   Hours available: {len(weather_data.hourly_data)}")
         
+        # Reflection: Evaluate weather data quality
+        print("\n   🔍 Reflecting on weather data quality...")
+        weather_reflection = reflection_engine.reflect_on_weather_data(weather_data.to_dict())
+        print(f"   Quality: {weather_reflection.quality.value} (score: {weather_reflection.score:.2f})")
+        if weather_reflection.issues:
+            print_warning(f"   Issues found: {len(weather_reflection.issues)}")
+            for issue in weather_reflection.issues[:2]:
+                print(f"      - {issue}")
+        if not weather_reflection.passed:
+            print_warning("   Weather data quality below threshold, but proceeding...")
+        
     except Exception as e:
-        print(f"❌ Failed to fetch weather data: {e}")
+        print_error(f"Failed to fetch weather data: {e}")
         sys.exit(1)
     
-    # Step 2: Generate AI recommendation
+    # Step 2: Generate AI recommendation with reflection
     print("\n🤖 Step 2: Generating clothing recommendation...")
     try:
         ai_recommender = AIRecommender(
@@ -121,13 +126,27 @@ def main():
         elif hf_api_key:
             print("   Using Hugging Face AI (Mistral-7B)")
         
-        recommendation = ai_recommender.generate_recommendation(weather_data.to_dict())
+        # Generate with reflection pattern (iterative refinement)
+        recommendation = ai_recommender.generate_recommendation(
+            weather_data.to_dict(),
+            reflection_engine=reflection_engine,
+            max_refinements=2
+        )
         
-        print(f"✅ Recommendation generated")
+        # Final reflection on recommendation
+        print("\n   🔍 Reflecting on recommendation quality...")
+        rec_reflection = reflection_engine.reflect_on_recommendation(
+            recommendation, weather_data.to_dict()
+        )
+        print(f"   Quality: {rec_reflection.quality.value} (score: {rec_reflection.score:.2f})")
+        if rec_reflection.issues:
+            print_warning(f"   Issues found: {len(rec_reflection.issues)}")
+        
+        print_success("Recommendation generated")
         print(f"   Preview: {recommendation[:100]}...")
         
     except Exception as e:
-        print(f"❌ Failed to generate recommendation: {e}")
+        print_error(f"Failed to generate recommendation: {e}")
         sys.exit(1)
     
     # Step 3: Format notification message
@@ -138,11 +157,24 @@ def main():
             recommendation
         )
         
-        print("✅ Notification formatted")
+        # Reflection: Evaluate notification completeness
+        print("\n   🔍 Reflecting on notification quality...")
+        notif_reflection = reflection_engine.reflect_on_notification(
+            full_message,
+            weather_data.to_dict(),
+            recommendation
+        )
+        print(f"   Quality: {notif_reflection.quality.value} (score: {notif_reflection.score:.2f})")
+        if notif_reflection.issues:
+            print_warning(f"   Issues found: {len(notif_reflection.issues)}")
+            for issue in notif_reflection.issues[:2]:
+                print(f"      - {issue}")
+        
+        print_success("Notification formatted")
         print(f"   Message length: {len(full_message)} characters")
         
     except Exception as e:
-        print(f"❌ Failed to format notification: {e}")
+        print_error(f"Failed to format notification: {e}")
         sys.exit(1)
     
     # Step 4: Send notification
@@ -158,7 +190,7 @@ def main():
             sys.exit(1)
         
     except Exception as e:
-        print(f"❌ Failed to send notification: {e}")
+        print_error(f"Failed to send notification: {e}")
         sys.exit(1)
     
     # Summary

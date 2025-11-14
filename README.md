@@ -1,18 +1,13 @@
 # 🌤️ Weather AI Agent
 
-A completely free, automated weather notification system that runs daily via GitHub Actions. Get personalized weather forecasts and AI-powered clothing recommendations delivered to your phone every morning at 6 AM (GMT+1).
+A completely free, automated weather notification system that runs daily via GitHub Actions. Get personalized weather forecasts and AI-powered clothing recommendations delivered to your phone every morning.
 
 ## ✨ Features
 
 - **Multiple Weather Sources**: Aggregates data from 5 free weather APIs for maximum reliability
-  - Open-Meteo (no API key needed)
-  - WeatherAPI.com (free tier)
-  - OpenWeatherMap (free tier)
-  - 7Timer (no API key needed)
-  - wttr.in (no API key needed)
-
-- **AI-Powered Recommendations**: Uses free AI APIs (Groq/Hugging Face) to generate personalized clothing advice
-- **Smart Aggregation**: Calculates consensus weather data using median values from multiple sources
+- **AI-Powered Recommendations**: Uses free AI APIs (Groq/Hugging Face) with self-reflection for quality
+- **Smart Aggregation**: Calculates consensus weather data using weighted medians from multiple sources
+- **Self-Reflection Pattern**: Agent evaluates and improves its own outputs iteratively
 - **Push Notifications**: Sends formatted notifications to your phone via Ntfy.sh
 - **Completely Free**: All services used are free (within their generous limits)
 - **Automated**: Runs daily via GitHub Actions at your specified time
@@ -227,53 +222,27 @@ Edit `src/ai_recommender.py` in the `format_notification()` method.
 
 ## 🔧 Local Testing
 
-Test the agent locally before deploying:
+Test the agent locally before deploying. See [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md) for detailed setup instructions.
 
+Quick test:
 ```bash
-# Install dependencies
 pip install -r requirements.txt
-
-# Set environment variables
-export LOCATION_LAT="48.8566"
-export LOCATION_LON="2.3522"
-export NTFY_TOPIC="your_topic_name"
-export GROQ_API_KEY="your_groq_key"
-export WEATHERAPI_KEY="your_weatherapi_key"  # optional
-export OPENWEATHER_KEY="your_openweather_key"  # optional
-
-# Run the agent
-cd src
-python weather_agent.py
-```
-
-Enable debug mode to see the full notification:
-
-```bash
-export DEBUG=1
-python weather_agent.py
+# Create .env file with your API keys
+cd src && python weather_agent.py
 ```
 
 ## 📊 How It Works
 
-1. **GitHub Actions** triggers the workflow daily at 6 AM GMT+1
+1. **GitHub Actions** triggers the workflow daily at your scheduled time
 2. **Weather Sources** fetches data from 5 different APIs simultaneously
-3. **Aggregation** calculates median values for temperature, precipitation, wind, etc.
-4. **AI Recommender** analyzes the weather and generates clothing advice
-5. **Ntfy.sh** delivers the formatted notification to your phone
+3. **Aggregation** calculates weighted median values for temperature, precipitation, wind, etc.
+4. **Reflection Engine** evaluates data quality and identifies issues
+5. **AI Recommender** generates clothing advice with iterative refinement
+6. **Reflection Engine** evaluates recommendation quality and refines if needed
+7. **Ntfy.sh** delivers the formatted notification to your phone
 
-## 🆓 Cost Breakdown
+See [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md) for architecture details and [docs/REFLECTION_PATTERN.md](docs/REFLECTION_PATTERN.md) for reflection pattern documentation.
 
-| Service | Free Tier | Usage | Cost |
-|---------|-----------|-------|------|
-| GitHub Actions | 2,000 min/month | ~1 min/day | $0 |
-| Open-Meteo | Unlimited | 1 call/day | $0 |
-| WeatherAPI.com | 1M calls/month | 1 call/day | $0 |
-| OpenWeatherMap | 1,000 calls/day | 1 call/day | $0 |
-| 7Timer | Unlimited | 1 call/day | $0 |
-| wttr.in | Unlimited | 1 call/day | $0 |
-| Groq | 14,400 req/day | 1 req/day | $0 |
-| Ntfy.sh | Unlimited | 1 msg/day | $0 |
-| **TOTAL** | | | **$0/month** |
 
 ## 🛠️ Troubleshooting
 
@@ -344,19 +313,23 @@ weather-agent/
 ├── src/
 │   ├── weather_agent.py             # Main orchestrator
 │   ├── weather_sources.py           # Multi-source weather fetching
-│   └── ai_recommender.py            # AI clothing recommendations
+│   ├── ai_recommender.py            # AI clothing recommendations
+│   ├── reflection_engine.py         # Self-evaluation and refinement
+│   └── utils.py                     # Shared utilities (DRY principles)
+├── docs/
+│   ├── DEV_GUIDE.md                 # Development guide & coding patterns
+│   └── REFLECTION_PATTERN.md        # Reflection pattern documentation
 ├── requirements.txt                  # Python dependencies
 └── README.md                        # This file
 ```
 
 ## 🤝 Contributing
 
-Contributions are welcome! Feel free to:
-- Report bugs
-- Suggest new features
-- Add more weather sources
-- Improve AI recommendations
-- Enhance notification formatting
+Contributions are welcome! Please see [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md) for:
+- Development setup instructions
+- Coding patterns and principles (DRY, Reflection, etc.)
+- Architecture overview
+- Contribution guidelines
 
 ## 📄 License
 

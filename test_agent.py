@@ -6,6 +6,8 @@ Run this to verify your setup before deploying to GitHub Actions
 
 import os
 import sys
+sys.path.insert(0, 'src')
+from utils import validate_coordinates, print_success, print_error, print_warning
 
 def test_imports():
     """Test if all required modules can be imported."""
@@ -13,19 +15,18 @@ def test_imports():
     try:
         import requests
         import statistics
-        print("   ✅ Standard libraries OK")
+        print_success("Standard libraries OK", indent=3)
     except ImportError as e:
-        print(f"   ❌ Import error: {e}")
+        print_error(f"Import error: {e}", indent=3)
         return False
     
     try:
-        sys.path.insert(0, 'src')
         from weather_sources import WeatherSources
         from ai_recommender import AIRecommender
         import weather_agent
-        print("   ✅ Project modules OK")
+        print_success("Project modules OK", indent=3)
     except ImportError as e:
-        print(f"   ❌ Import error: {e}")
+        print_error(f"Import error: {e}", indent=3)
         return False
     
     return True
@@ -36,30 +37,31 @@ def test_environment():
     print("\n🔧 Testing environment variables...")
     required = ['LOCATION_LAT', 'LOCATION_LON', 'NTFY_TOPIC']
     optional = ['WEATHERAPI_KEY', 'OPENWEATHER_KEY']
+    ai_keys = ['GROQ_API_KEY', 'HUGGINGFACE_API_KEY']
     
     all_ok = True
     for var in required:
         if os.getenv(var):
-            print(f"   ✅ {var} is set")
+            print_success(f"{var} is set", indent=3)
         else:
-            print(f"   ❌ {var} is NOT set (required)")
+            print_error(f"{var} is NOT set (required)", indent=3)
             all_ok = False
     
     has_ai_key = False
-    for var in ['GROQ_API_KEY', 'HUGGINGFACE_API_KEY']:
+    for var in ai_keys:
         if os.getenv(var):
-            print(f"   ✅ {var} is set")
+            print_success(f"{var} is set", indent=3)
             has_ai_key = True
     
     if not has_ai_key:
-        print(f"   ❌ No AI API key set (GROQ_API_KEY or HUGGINGFACE_API_KEY is required)")
+        print_error("No AI API key set (GROQ_API_KEY or HUGGINGFACE_API_KEY is required)", indent=3)
         all_ok = False
     
-    for var in ['WEATHERAPI_KEY', 'OPENWEATHER_KEY']:
+    for var in optional:
         if os.getenv(var):
-            print(f"   ✅ {var} is set")
+            print_success(f"{var} is set", indent=3)
         else:
-            print(f"   ⚠️  {var} is NOT set (optional, but recommended)")
+            print_warning(f"{var} is NOT set (optional, but recommended)", indent=3)
     
     return all_ok
 
@@ -68,29 +70,36 @@ def test_coordinates():
     """Test if coordinates are valid."""
     print("\n📍 Testing coordinates...")
     try:
-        lat = float(os.getenv('LOCATION_LAT', '0'))
-        lon = float(os.getenv('LOCATION_LON', '0'))
-        
-        if -90 <= lat <= 90 and -180 <= lon <= 180:
-            print(f"   ✅ Coordinates valid: {lat}, {lon}")
-            return True
-        else:
-            print(f"   ❌ Coordinates out of range: {lat}, {lon}")
-            return False
-    except (ValueError, TypeError):
-        print(f"   ❌ Coordinates are not valid numbers")
+        lat_str = os.getenv('LOCATION_LAT', '0')
+        lon_str = os.getenv('LOCATION_LON', '0')
+        lat, lon = validate_coordinates(lat_str, lon_str)
+        print_success(f"Coordinates valid: {lat}, {lon}", indent=3)
+        return True
+    except ValueError as e:
+        print_error(str(e), indent=3)
         return False
 
+
+def _test_single_source(weather: 'WeatherSources', source_name: str, fetch_func) -> bool:
+    """Helper function to test a single weather source."""
+    print(f"   Testing {source_name}...", end="")
+    result = fetch_func()
+    if result:
+        print_success(f"{source_name} working", indent=0)
+        return True
+    else:
+        print_error(f"{source_name} failed", indent=0)
+        return False
 
 def test_weather_sources():
     """Test if weather sources can be fetched."""
     print("\n🌐 Testing weather sources...")
     try:
-        sys.path.insert(0, 'src')
         from weather_sources import WeatherSources
         
-        lat = float(os.getenv('LOCATION_LAT', '48.8566'))
-        lon = float(os.getenv('LOCATION_LON', '2.3522'))
+        lat_str = os.getenv('LOCATION_LAT', '48.8566')
+        lon_str = os.getenv('LOCATION_LON', '2.3522')
+        lat, lon = validate_coordinates(lat_str, lon_str)
         
         weather = WeatherSources(
             lat=lat,
@@ -100,62 +109,32 @@ def test_weather_sources():
         )
         
         # Test individual sources
-        sources_tested = 0
-        sources_working = 0
-        
-        print("   Testing Open-Meteo...")
-        if weather.fetch_open_meteo():
-            print("      ✅ Open-Meteo working")
-            sources_working += 1
-        else:
-            print("      ❌ Open-Meteo failed")
-        sources_tested += 1
+        sources_to_test = [
+            ('Open-Meteo', weather.fetch_open_meteo),
+            ('7Timer', weather.fetch_7timer),
+            ('wttr.in', weather.fetch_wttr),
+        ]
         
         if os.getenv('WEATHERAPI_KEY'):
-            print("   Testing WeatherAPI...")
-            if weather.fetch_weatherapi():
-                print("      ✅ WeatherAPI working")
-                sources_working += 1
-            else:
-                print("      ❌ WeatherAPI failed")
-            sources_tested += 1
+            sources_to_test.append(('WeatherAPI', weather.fetch_weatherapi))
         
         if os.getenv('OPENWEATHER_KEY'):
-            print("   Testing OpenWeatherMap...")
-            if weather.fetch_openweathermap():
-                print("      ✅ OpenWeatherMap working")
-                sources_working += 1
-            else:
-                print("      ❌ OpenWeatherMap failed")
-            sources_tested += 1
+            sources_to_test.append(('OpenWeatherMap', weather.fetch_openweathermap))
         
-        print("   Testing 7Timer...")
-        if weather.fetch_7timer():
-            print("      ✅ 7Timer working")
-            sources_working += 1
-        else:
-            print("      ❌ 7Timer failed")
-        sources_tested += 1
-        
-        print("   Testing wttr.in...")
-        if weather.fetch_wttr():
-            print("      ✅ wttr.in working")
-            sources_working += 1
-        else:
-            print("      ❌ wttr.in failed")
-        sources_tested += 1
+        sources_working = sum(1 for name, func in sources_to_test if _test_single_source(weather, name, func))
+        sources_tested = len(sources_to_test)
         
         print(f"\n   📊 {sources_working}/{sources_tested} sources working")
         
         if sources_working >= 2:
-            print("   ✅ Sufficient sources available")
+            print_success("Sufficient sources available", indent=3)
             return True
         else:
-            print("   ❌ Need at least 2 working sources")
+            print_error("Need at least 2 working sources", indent=3)
             return False
             
     except Exception as e:
-        print(f"   ❌ Error testing weather sources: {e}")
+        print_error(f"Error testing weather sources: {e}", indent=3)
         return False
 
 
@@ -169,15 +148,15 @@ def test_ntfy():
         # Just test if we can reach ntfy.sh
         response = requests.get("https://ntfy.sh", timeout=5)
         if response.status_code == 200:
-            print(f"   ✅ Ntfy.sh is accessible")
+            print_success("Ntfy.sh is accessible", indent=3)
             print(f"   📡 Your topic: {topic}")
             print(f"   💡 Subscribe in the Ntfy app to receive notifications")
             return True
         else:
-            print(f"   ⚠️  Ntfy.sh returned status {response.status_code}")
+            print_warning(f"Ntfy.sh returned status {response.status_code}", indent=3)
             return False
     except Exception as e:
-        print(f"   ❌ Cannot reach Ntfy.sh: {e}")
+        print_error(f"Cannot reach Ntfy.sh: {e}", indent=3)
         return False
 
 
@@ -200,8 +179,10 @@ def main():
     print("=" * 60)
     
     for test_name, result in results.items():
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status:>10} - {test_name.capitalize()}")
+        if result:
+            print_success(f"{test_name.capitalize()}", indent=0)
+        else:
+            print_error(f"{test_name.capitalize()}", indent=0)
     
     all_passed = all(results.values())
     

@@ -6,6 +6,8 @@ Uses free AI APIs (Groq/Hugging Face) - requires at least one API key.
 import os
 from typing import Dict, List, Optional
 import json
+from utils import fetch_api_data
+from reflection_engine import ReflectionEngine, ReflectionResult
 
 
 class AIRecommender:
@@ -20,19 +22,83 @@ class AIRecommender:
                 "At least one API key is required. Please provide either GROQ_API_KEY or HUGGINGFACE_API_KEY."
             )
     
-    def generate_recommendation(self, weather_data: Dict) -> str:
-        """Generate clothing recommendation based on weather data using AI."""
+    def generate_recommendation(
+        self,
+        weather_data: Dict,
+        reflection_engine: Optional[ReflectionEngine] = None,
+        max_refinements: int = 2
+    ) -> str:
+        """
+        Generate clothing recommendation based on weather data using AI.
+        Uses reflection pattern to improve quality iteratively.
+        
+        Args:
+            weather_data: Weather data dictionary
+            reflection_engine: Optional reflection engine for quality assessment
+            max_refinements: Maximum number of refinement iterations
+            
+        Returns:
+            Generated recommendation string
+        """
         try:
+            # Initial generation
             if self.groq_api_key:
-                return self._generate_with_groq(weather_data)
+                recommendation = self._generate_with_groq(weather_data)
             elif self.hf_api_key:
-                return self._generate_with_huggingface(weather_data)
+                recommendation = self._generate_with_huggingface(weather_data)
+            else:
+                raise ValueError("No AI API key available")
+            
+            # Apply reflection pattern if reflection engine provided
+            if reflection_engine:
+                for iteration in range(max_refinements + 1):
+                    # Reflect on the recommendation
+                    reflection = reflection_engine.reflect_on_recommendation(
+                        recommendation, weather_data
+                    )
+                    
+                    if reflection.passed:
+                        if iteration > 0:
+                            print(f"   ✓ Recommendation refined (iteration {iteration + 1})")
+                        break
+                    
+                    # If not passed and not last iteration, refine
+                    if iteration < max_refinements:
+                        print(f"   🔄 Refining recommendation (iteration {iteration + 2})...")
+                        print(f"      Issues: {', '.join(reflection.issues[:2])}")
+                        
+                        # Generate refined recommendation with feedback
+                        refined = self._generate_with_feedback(
+                            weather_data,
+                            reflection.issues,
+                            reflection.suggestions
+                        )
+                        recommendation = refined
+                    else:
+                        # Last iteration, accept what we have
+                        print(f"   ⚠️  Quality threshold not fully met, but proceeding")
+                        break
+            
+            return recommendation
+            
         except Exception as e:
             print(f"AI generation failed: {e}")
             raise RuntimeError(f"Failed to generate recommendation with AI: {e}") from e
     
-    def _generate_with_groq(self, weather_data: Dict) -> str:
-        """Generate recommendation using Groq API with Llama."""
+    def _generate_with_groq(
+        self,
+        weather_data: Dict,
+        feedback_issues: Optional[List[str]] = None,
+        feedback_suggestions: Optional[List[str]] = None
+    ) -> str:
+        """
+        Generate recommendation using Groq API with Llama.
+        
+        Args:
+            weather_data: Weather data dictionary
+            feedback_issues: Optional list of issues from reflection
+            feedback_suggestions: Optional list of suggestions from reflection
+        """
         try:
             from groq import Groq
             
@@ -41,13 +107,19 @@ class AIRecommender:
             # Prepare weather summary
             weather_summary = self._format_weather_for_ai(weather_data)
             
-            prompt = f"""Based on the following 10-hour weather forecast, provide a concise clothing recommendation (2-3 sentences max).
+            # Build prompt with optional feedback
+            base_prompt = f"""Based on the following 10-hour weather forecast, provide a concise clothing recommendation (2-3 sentences max).
 Focus on practical advice about what to wear.
 
 Weather forecast:
-{weather_summary}
-
-Provide a friendly, practical recommendation about what to wear today."""
+{weather_summary}"""
+            
+            if feedback_issues and feedback_suggestions:
+                feedback_text = "\n\nPrevious attempt had these issues: " + ", ".join(feedback_issues[:2])
+                feedback_text += "\nPlease address: " + ", ".join(feedback_suggestions[:2])
+                prompt = base_prompt + feedback_text + "\n\nProvide an improved, friendly, practical recommendation about what to wear today."
+            else:
+                prompt = base_prompt + "\n\nProvide a friendly, practical recommendation about what to wear today."
 
             chat_completion = client.chat.completions.create(
                 messages=[
@@ -71,43 +143,75 @@ Provide a friendly, practical recommendation about what to wear today."""
             print(f"Groq API error: {e}")
             raise
     
-    def _generate_with_huggingface(self, weather_data: Dict) -> str:
-        """Generate recommendation using Hugging Face Inference API."""
-        try:
-            import requests
-            
-            API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
-            headers = {"Authorization": f"Bearer {self.hf_api_key}"}
-            
-            weather_summary = self._format_weather_for_ai(weather_data)
-            
-            prompt = f"""<s>[INST] Based on this 10-hour weather forecast, provide a brief clothing recommendation (2-3 sentences):
-
-{weather_summary}
-
-What should I wear? [/INST]"""
-
-            payload = {
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 150,
-                    "temperature": 0.7,
-                    "return_full_text": False
-                }
-            }
-            
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
-            
-            result = response.json()
-            if isinstance(result, list) and len(result) > 0:
-                return result[0]['generated_text'].strip()
-            
-            raise Exception("Unexpected response format from Hugging Face")
+    def _generate_with_feedback(
+        self,
+        weather_data: Dict,
+        issues: List[str],
+        suggestions: List[str]
+    ) -> str:
+        """Generate refined recommendation based on feedback."""
+        if self.groq_api_key:
+            return self._generate_with_groq(weather_data, issues, suggestions)
+        elif self.hf_api_key:
+            return self._generate_with_huggingface(weather_data, issues, suggestions)
+        else:
+            raise ValueError("No AI API key available")
+    
+    def _generate_with_huggingface(
+        self,
+        weather_data: Dict,
+        feedback_issues: Optional[List[str]] = None,
+        feedback_suggestions: Optional[List[str]] = None
+    ) -> str:
+        """
+        Generate recommendation using Hugging Face Inference API.
         
-        except Exception as e:
-            print(f"Hugging Face API error: {e}")
-            raise
+        Args:
+            weather_data: Weather data dictionary
+            feedback_issues: Optional list of issues from reflection
+            feedback_suggestions: Optional list of suggestions from reflection
+        """
+        API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+        headers = {"Authorization": f"Bearer {self.hf_api_key}"}
+        
+        weather_summary = self._format_weather_for_ai(weather_data)
+        
+        base_prompt = f"""<s>[INST] Based on this 10-hour weather forecast, provide a brief clothing recommendation (2-3 sentences):
+
+{weather_summary}"""
+        
+        if feedback_issues and feedback_suggestions:
+            feedback_text = "\n\nPrevious attempt had issues: " + ", ".join(feedback_issues[:2])
+            feedback_text += ". Please address: " + ", ".join(feedback_suggestions[:2])
+            prompt = base_prompt + feedback_text + "\n\nWhat should I wear? [/INST]"
+        else:
+            prompt = base_prompt + "\n\nWhat should I wear? [/INST]"
+
+        payload = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": 150,
+                "temperature": 0.7,
+                "return_full_text": False
+            }
+        }
+        
+        result = fetch_api_data(
+            url=API_URL,
+            headers=headers,
+            method='POST',
+            json_data=payload,
+            timeout=30,
+            source_name="Hugging Face"
+        )
+        
+        if not result:
+            raise Exception("Failed to get response from Hugging Face API")
+        
+        if isinstance(result, list) and len(result) > 0:
+            return result[0]['generated_text'].strip()
+        
+        raise Exception("Unexpected response format from Hugging Face")
     
     def _format_weather_for_ai(self, weather_data: Dict) -> str:
         """Format weather data for AI prompt."""
