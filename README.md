@@ -1,6 +1,6 @@
 # 🌤️ Weather AI Agent
 
-A completely free, automated weather notification system that runs daily via GitHub Actions. Get personalized weather forecasts and AI-powered clothing recommendations delivered to your phone every morning.
+A completely free, automated weather notification system that runs daily via GitHub Actions. Get personalized weather forecasts and AI-powered clothing recommendations delivered to your phone every morning. 
 
 ## ✨ Features
 
