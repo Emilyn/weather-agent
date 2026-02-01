@@ -224,7 +224,10 @@ Weather forecast:
         
         # Check for precipitation
         total_precip = sum(h['precipitation'] for h in hourly)
-        will_rain = total_precip > 1.0
+        total_rain = sum(h.get('rain', 0) for h in hourly)
+        total_snow = sum(h.get('snow', 0) for h in hourly)
+        will_rain = total_rain > 1.0
+        will_snow = total_snow > 0.5
         
         # Get wind info
         max_wind = max(h['wind_speed'] for h in hourly)
@@ -233,9 +236,18 @@ Weather forecast:
         conditions = [h['condition'] for h in hourly]
         main_condition = max(set(conditions), key=conditions.count)
         
+        # Build precipitation description
+        precip_desc = []
+        if will_snow:
+            precip_desc.append(f"snow: {total_snow:.1f}mm")
+        if will_rain:
+            precip_desc.append(f"rain: {total_rain:.1f}mm")
+        if not precip_desc:
+            precip_desc.append("dry")
+        
         summary = f"""Temperature: {min_temp}°C to {max_temp}°C
 Conditions: {main_condition}
-Precipitation: {total_precip:.1f}mm total {'(rain expected)' if will_rain else '(dry)'}
+Precipitation: {', '.join(precip_desc)}
 Wind: up to {max_wind:.1f} m/s
 Humidity: {hourly[0]['humidity']}%"""
         
@@ -286,11 +298,19 @@ Humidity: {hourly[0]['humidity']}%"""
         max_feels_like = max(feels_like_temps)
         avg_feels_like = sum(feels_like_temps) / len(feels_like_temps)
         
-        # Rain analysis
+        # Precipitation analysis
         total_precip = sum(h['precipitation'] for h in hourly)
+        total_rain = sum(h.get('rain', 0) for h in hourly)
+        total_snow = sum(h.get('snow', 0) for h in hourly)
         max_precip = max(h['precipitation'] for h in hourly)
-        will_rain = total_precip > 0.5
-        rain_hours = [i for i, h in enumerate(hourly) if h['precipitation'] > 0.5]
+        max_rain = max(h.get('rain', 0) for h in hourly)
+        max_snow = max(h.get('snow', 0) for h in hourly)
+        
+        will_rain = total_rain > 0.5
+        will_snow = total_snow > 0.5
+        
+        rain_hours = [i for i, h in enumerate(hourly) if h.get('rain', 0) > 0.5]
+        snow_hours = [i for i, h in enumerate(hourly) if h.get('snow', 0) > 0.5]
         
         # Wind analysis
         wind_speeds = [h['wind_speed'] for h in hourly]
@@ -309,20 +329,37 @@ Humidity: {hourly[0]['humidity']}%"""
         message += f"  (Range: {min_feels_like:.1f}°C - {max_feels_like:.1f}°C)\n\n"
         
         # Rain section
-        message += "☁️ Rain\n"
+        message += "🌧️ Rain\n"
         if will_rain:
             if len(rain_hours) > 0:
                 hours_str = ", ".join([f"+{h}h" for h in rain_hours[:5]])
                 if len(rain_hours) > 5:
                     hours_str += f" (+{len(rain_hours)-5} more)"
                 message += "• ⚠️ Rain expected\n"
-                message += f"• Total: {total_precip:.1f}mm\n"
-                message += f"• Peak: {max_precip:.1f}mm\n"
+                message += f"• Total: {total_rain:.1f}mm\n"
+                message += f"• Peak: {max_rain:.1f}mm\n"
                 message += f"• Hours: {hours_str}\n"
             else:
-                message += f"• ⚠️ Light rain possible ({total_precip:.1f}mm total)\n"
+                message += f"• ⚠️ Light rain possible ({total_rain:.1f}mm total)\n"
         else:
             message += "• ✅ No rain expected\n"
+        message += "\n"
+        
+        # Snow section
+        message += "❄️ Snow\n"
+        if will_snow:
+            if len(snow_hours) > 0:
+                hours_str = ", ".join([f"+{h}h" for h in snow_hours[:5]])
+                if len(snow_hours) > 5:
+                    hours_str += f" (+{len(snow_hours)-5} more)"
+                message += "• ⚠️ Snow expected\n"
+                message += f"• Total: {total_snow:.1f}mm\n"
+                message += f"• Peak: {max_snow:.1f}mm\n"
+                message += f"• Hours: {hours_str}\n"
+            else:
+                message += f"• ⚠️ Light snow possible ({total_snow:.1f}mm total)\n"
+        else:
+            message += "• ✅ No snow expected\n"
         message += "\n"
         
         # Wind section

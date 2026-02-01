@@ -5,6 +5,7 @@ A completely free, automated weather notification system that runs daily via Git
 ## ✨ Features
 
 - **Multiple Weather Sources**: Aggregates data from 5 free weather APIs for maximum reliability
+- **Comprehensive Weather Data**: Tracks temperature, rain, snow, wind speed, and humidity
 - **AI-Powered Recommendations**: Uses free AI APIs (Groq/Hugging Face) with self-reflection for quality
 - **Smart Aggregation**: Calculates consensus weather data using weighted medians from multiple sources
 - **Self-Reflection Pattern**: Agent evaluates and improves its own outputs iteratively
@@ -162,33 +163,30 @@ Once enabled, the workflow runs automatically:
 Every morning at 6 AM, you'll get a notification like this:
 
 ```
-🌤️ Good Morning! Weather Report
-===================================
+🌡️ Temperature
+• Low: 12.0°C
+• High: 18.0°C
+• Feels like: 15.5°C
+  (Range: 12.0°C - 18.0°C)
 
-📊 Next 10 Hours Summary:
-   Temperature: 12°C - 18°C
-   Conditions: Partly cloudy
+🌧️ Rain
+• ✅ No rain expected
 
-👔 What to Wear:
+❄️ Snow
+• ✅ No snow expected
+
+🌬️ Wind
+• ✅ Light winds
+• Speed: 3.5 m/s (avg)
+• Peak: 5.2 m/s
+
+👔 Recommendation
 Based on the forecast, I recommend wearing a light 
 jacket or sweater. The temperature will be mild but 
-may feel cool in the morning. No rain expected, so 
-you can leave the umbrella at home!
+may feel cool in the morning. Perfect day for outdoor 
+activities!
 
-⏰ Hourly Forecast:
-  +0h: 12.0°C Partly cloudy
-  +1h: 13.5°C Partly cloudy
-  +2h: 15.0°C Mostly sunny
-  +3h: 16.5°C Sunny
-  +4h: 17.5°C Sunny
-  +5h: 18.0°C Sunny
-  +6h: 17.5°C Partly cloudy
-  +7h: 16.0°C Partly cloudy
-  +8h: 15.0°C Cloudy
-  +9h: 14.0°C Cloudy
-
-📡 Data from 5 sources (Reliability: 100%)
-Sources: Open-Meteo, WeatherAPI, wttr.in
+Have a great day!
 ```
 
 ## ⚙️ Customization

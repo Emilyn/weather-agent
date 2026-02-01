@@ -75,7 +75,7 @@ class WeatherSources:
             params={
                 'latitude': self.lat,
                 'longitude': self.lon,
-                'hourly': 'temperature_2m,precipitation,windspeed_10m,relativehumidity_2m,weathercode',
+                'hourly': 'temperature_2m,precipitation,rain,snowfall,windspeed_10m,relativehumidity_2m,weathercode',
                 'forecast_days': 1,
                 'timezone': 'auto'
             },
@@ -90,6 +90,8 @@ class WeatherSources:
             data['hourly']['time'][current_hour:current_hour+10],
             data['hourly']['temperature_2m'][current_hour:current_hour+10],
             data['hourly']['precipitation'][current_hour:current_hour+10],
+            data['hourly']['rain'][current_hour:current_hour+10],
+            data['hourly']['snowfall'][current_hour:current_hour+10],
             data['hourly']['windspeed_10m'][current_hour:current_hour+10],
             data['hourly']['relativehumidity_2m'][current_hour:current_hour+10],
             data['hourly']['weathercode'][current_hour:current_hour+10]
@@ -101,9 +103,11 @@ class WeatherSources:
                 'time': item[0],
                 'temperature': item[1],
                 'precipitation': item[2],
-                'wind_speed': item[3],
-                'humidity': item[4],
-                'condition': self._decode_wmo_code(item[5])
+                'rain': item[3],
+                'snow': item[4],
+                'wind_speed': item[5],
+                'humidity': item[6],
+                'condition': self._decode_wmo_code(item[7])
             },
             max_items=10
         )
@@ -136,6 +140,8 @@ class WeatherSources:
                 'time': hour['time'],
                 'temperature': hour['temp_c'],
                 'precipitation': hour['precip_mm'],
+                'rain': hour.get('precip_mm', 0) if hour.get('snow_cm', 0) == 0 else 0,
+                'snow': hour.get('snow_cm', 0) * 10,  # Convert cm to mm for consistency
                 'wind_speed': kmh_to_ms(hour['wind_kph']),
                 'humidity': hour['humidity'],
                 'condition': hour['condition']['text']
@@ -170,6 +176,8 @@ class WeatherSources:
                 'time': item['dt_txt'],
                 'temperature': item['main']['temp'],
                 'precipitation': item.get('rain', {}).get('3h', 0) / 3,  # Convert 3h to 1h avg
+                'rain': item.get('rain', {}).get('3h', 0) / 3,
+                'snow': item.get('snow', {}).get('3h', 0) / 3,  # Convert 3h to 1h avg
                 'wind_speed': item['wind']['speed'],
                 'humidity': item['main']['humidity'],
                 'condition': item['weather'][0]['description']
@@ -199,6 +207,8 @@ class WeatherSources:
                 'time': str(item['timepoint']),
                 'temperature': item['temp2m'],
                 'precipitation': self._estimate_precip_from_weather(item['weather']),
+                'rain': self._estimate_rain_from_weather(item['weather']),
+                'snow': self._estimate_snow_from_weather(item['weather']),
                 'wind_speed': kmh_to_ms(item['wind10m']['speed']),  # Convert km/h to m/s (speed is already in km/h)
                 'humidity': item.get('rh2m', 50),
                 'condition': item['weather']
@@ -223,6 +233,8 @@ class WeatherSources:
                 'time': hour['time'],
                 'temperature': safe_float(hour['tempC']),
                 'precipitation': safe_float(hour['precipMM']),
+                'rain': safe_float(hour.get('precipMM', 0)) if 'snow' not in hour.get('weatherDesc', [{}])[0].get('value', '').lower() else 0,
+                'snow': safe_float(hour.get('totalSnow_cm', 0)) * 10,  # Convert cm to mm
                 'wind_speed': kmh_to_ms(safe_float(hour['windspeedKmph'])),
                 'humidity': safe_float(hour['humidity']),
                 'condition': hour['weatherDesc'][0]['value']
@@ -423,6 +435,8 @@ class WeatherSources:
         for hour_idx in range(min_hours):
             temp_data = []  # List of (value, weight) tuples
             precips = []
+            rains = []
+            snows = []
             winds = []
             humidities = []
             conditions = []
@@ -435,6 +449,8 @@ class WeatherSources:
                         # Safely convert all numeric values to float, handling None and string values
                         temp_val = safe_float(hour_data.get('temperature'))
                         precip_val = safe_float(hour_data.get('precipitation'), 0.0)
+                        rain_val = safe_float(hour_data.get('rain'), 0.0)
+                        snow_val = safe_float(hour_data.get('snow'), 0.0)
                         wind_val = safe_float(hour_data.get('wind_speed'), 0.0)
                         humidity_val = safe_float(hour_data.get('humidity'), 50.0)
                         condition_val = hour_data.get('condition', 'Unknown')
@@ -449,6 +465,12 @@ class WeatherSources:
                         
                         if 0 <= precip_val <= 500:  # Reasonable precipitation (mm)
                             precips.append(precip_val)
+                        
+                        if 0 <= rain_val <= 500:  # Reasonable rain (mm)
+                            rains.append(rain_val)
+                        
+                        if 0 <= snow_val <= 500:  # Reasonable snow (mm)
+                            snows.append(snow_val)
                         
                         if 0 <= wind_val <= 100:  # Reasonable wind speed (m/s)
                             winds.append(wind_val)
@@ -472,6 +494,8 @@ class WeatherSources:
             # Remove outliers for more accurate aggregation
             temps_clean = self._remove_outliers(temps)
             precips_clean = self._remove_outliers(precips)
+            rains_clean = self._remove_outliers(rains)
+            snows_clean = self._remove_outliers(snows)
             winds_clean = self._remove_outliers(winds)
             humidities_clean = self._remove_outliers(humidities)
             
@@ -492,6 +516,8 @@ class WeatherSources:
                 temp_final = self._trimmed_mean(temps_clean if temps_clean else temps)
             
             precip_final = self._trimmed_mean(precips_clean if precips_clean else precips) if precips else 0.0
+            rain_final = self._trimmed_mean(rains_clean if rains_clean else rains) if rains else 0.0
+            snow_final = self._trimmed_mean(snows_clean if snows_clean else snows) if snows else 0.0
             wind_final = self._trimmed_mean(winds_clean if winds_clean else winds) if winds else 0.0
             humidity_final = self._trimmed_mean(humidities_clean if humidities_clean else humidities) if humidities else 50.0
             
@@ -509,6 +535,8 @@ class WeatherSources:
                 'hour': hour_idx,
                 'temperature': round(temp_final, 1),
                 'precipitation': round(precip_final, 2),
+                'rain': round(rain_final, 2),
+                'snow': round(snow_final, 2),
                 'wind_speed': round(wind_final, 1),
                 'humidity': round(humidity_final, 1),
                 'condition': max(set(conditions), key=conditions.count) if conditions else 'Unknown',
@@ -563,6 +591,29 @@ class WeatherSources:
             return 0.5
         elif 'snow' in weather_lower:
             return 1.0
+        return 0.0
+    
+    @staticmethod
+    def _estimate_rain_from_weather(weather: str) -> float:
+        """Estimate rain from weather description."""
+        weather_lower = weather.lower()
+        if 'rain' in weather_lower or 'shower' in weather_lower:
+            return 2.0
+        elif 'drizzle' in weather_lower:
+            return 0.5
+        return 0.0
+    
+    @staticmethod
+    def _estimate_snow_from_weather(weather: str) -> float:
+        """Estimate snow from weather description."""
+        weather_lower = weather.lower()
+        if 'snow' in weather_lower:
+            if 'heavy' in weather_lower:
+                return 5.0
+            elif 'light' in weather_lower or 'slight' in weather_lower:
+                return 1.0
+            else:
+                return 2.0
         return 0.0
 
 
