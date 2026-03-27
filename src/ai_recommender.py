@@ -282,13 +282,12 @@ Humidity: {hourly[0]['humidity']}%"""
     def format_notification(self, weather_data: Dict, recommendation: str) -> str:
         """Format the complete notification message with nice formatting."""
         hourly = weather_data['hourly_data']
-        
+
         # Calculate key metrics
         temps = [h['temperature'] for h in hourly]
         min_temp = min(temps)
         max_temp = max(temps)
-        avg_temp = sum(temps) / len(temps)
-        
+
         # Calculate feels like temperatures
         feels_like_temps = [
             self._calculate_feels_like(h['temperature'], h['humidity'], h['wind_speed'])
@@ -296,89 +295,73 @@ Humidity: {hourly[0]['humidity']}%"""
         ]
         min_feels_like = min(feels_like_temps)
         max_feels_like = max(feels_like_temps)
-        avg_feels_like = sum(feels_like_temps) / len(feels_like_temps)
-        
+
         # Precipitation analysis
-        total_precip = sum(h['precipitation'] for h in hourly)
         total_rain = sum(h.get('rain', 0) for h in hourly)
         total_snow = sum(h.get('snow', 0) for h in hourly)
-        max_precip = max(h['precipitation'] for h in hourly)
         max_rain = max(h.get('rain', 0) for h in hourly)
         max_snow = max(h.get('snow', 0) for h in hourly)
-        
+
         will_rain = total_rain > 0.5
         will_snow = total_snow > 0.5
-        
+
         rain_hours = [i for i, h in enumerate(hourly) if h.get('rain', 0) > 0.5]
         snow_hours = [i for i, h in enumerate(hourly) if h.get('snow', 0) > 0.5]
-        
+
         # Wind analysis
         wind_speeds = [h['wind_speed'] for h in hourly]
         max_wind = max(wind_speeds)
         avg_wind = sum(wind_speeds) / len(wind_speeds)
         is_windy = max_wind > 7.0  # m/s
-        
-        # Initialize message
-        message = ""
-        
+
+        # Header — quick at-a-glance summary
+        message = f"🌤️ Today: {min_temp:.0f}°C – {max_temp:.0f}°C\n\n"
+
         # Temperature section
         message += "🌡️ Temperature\n"
-        message += f"• Low: {min_temp:.1f}°C\n"
-        message += f"• High: {max_temp:.1f}°C\n"
-        message += f"• Feels like: {avg_feels_like:.1f}°C\n"
-        message += f"  (Range: {min_feels_like:.1f}°C - {max_feels_like:.1f}°C)\n\n"
-        
+        message += f"• {min_temp:.1f}°C → {max_temp:.1f}°C\n"
+        message += f"• Feels like: {min_feels_like:.1f}°C → {max_feels_like:.1f}°C\n\n"
+
         # Rain section
         message += "🌧️ Rain\n"
         if will_rain:
-            if len(rain_hours) > 0:
-                hours_str = ", ".join([f"+{h}h" for h in rain_hours[:5]])
-                if len(rain_hours) > 5:
-                    hours_str += f" (+{len(rain_hours)-5} more)"
-                message += "• ⚠️ Rain expected\n"
-                message += f"• Total: {total_rain:.1f}mm\n"
-                message += f"• Peak: {max_rain:.1f}mm\n"
-                message += f"• Hours: {hours_str}\n"
+            hours_str = ", ".join([f"+{h}h" for h in rain_hours[:5]])
+            if len(rain_hours) > 5:
+                hours_str += f" (+{len(rain_hours)-5} more)"
+            if rain_hours:
+                message += f"• ⚠️ Expected · {total_rain:.1f}mm total · Peak: {max_rain:.1f}mm/h\n"
+                message += f"• At: {hours_str}\n"
             else:
                 message += f"• ⚠️ Light rain possible ({total_rain:.1f}mm total)\n"
         else:
-            message += "• ✅ No rain expected\n"
+            message += "• ✅ None expected\n"
         message += "\n"
-        
-        # Snow section
-        message += "❄️ Snow\n"
+
+        # Snow section — only shown when relevant
         if will_snow:
-            if len(snow_hours) > 0:
-                hours_str = ", ".join([f"+{h}h" for h in snow_hours[:5]])
-                if len(snow_hours) > 5:
-                    hours_str += f" (+{len(snow_hours)-5} more)"
-                message += "• ⚠️ Snow expected\n"
-                message += f"• Total: {total_snow:.1f}mm\n"
-                message += f"• Peak: {max_snow:.1f}mm\n"
-                message += f"• Hours: {hours_str}\n"
+            message += "❄️ Snow\n"
+            hours_str = ", ".join([f"+{h}h" for h in snow_hours[:5]])
+            if len(snow_hours) > 5:
+                hours_str += f" (+{len(snow_hours)-5} more)"
+            if snow_hours:
+                message += f"• ⚠️ Expected · {total_snow:.1f}mm total · Peak: {max_snow:.1f}mm/h\n"
+                message += f"• At: {hours_str}\n"
             else:
                 message += f"• ⚠️ Light snow possible ({total_snow:.1f}mm total)\n"
-        else:
-            message += "• ✅ No snow expected\n"
-        message += "\n"
-        
+            message += "\n"
+
         # Wind section
         message += "🌬️ Wind\n"
         if is_windy:
-            message += "• ⚠️ Windy conditions\n"
+            message += f"• ⚠️ Windy · {avg_wind:.1f} m/s avg · {max_wind:.1f} m/s peak\n\n"
         else:
-            message += "• ✅ Light winds\n"
-        message += f"• Speed: {avg_wind:.1f} m/s (avg)\n"
-        message += f"• Peak: {max_wind:.1f} m/s\n"
-        message += "\n"
-        
+            message += f"• ✅ Light · {avg_wind:.1f} m/s avg · {max_wind:.1f} m/s peak\n\n"
+
         # Recommendation section
+        message += "─────────────────\n"
         message += "👔 Recommendation\n"
-        message += f"{recommendation}\n"
-        message += "                \n"
+        message += f"{recommendation}\n\n"
         message += "Have a great day!\n"
-        message += "                \n"
-        message += "                \n"
         return message
 
 
