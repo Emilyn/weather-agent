@@ -6,7 +6,7 @@ A completely free, automated weather notification system that runs daily via Git
 
 - **Multiple Weather Sources**: Aggregates data from 5 free weather APIs for maximum reliability
 - **Comprehensive Weather Data**: Tracks temperature, rain, snow, wind speed, and humidity
-- **AI-Powered Recommendations**: Uses free AI APIs (Groq/Hugging Face) with self-reflection for quality
+- **AI-Powered Recommendations**: Uses free GitHub Models (no key needed in Actions), with optional Groq/Hugging Face fallbacks and self-reflection for quality
 - **Smart Aggregation**: Calculates consensus weather data using weighted medians from multiple sources
 - **Self-Reflection Pattern**: Agent evaluates and improves its own outputs iteratively
 - **Push Notifications**: Sends formatted notifications to your phone via Ntfy.sh
@@ -20,9 +20,9 @@ Before setting up, you'll need:
 1. A GitHub account (free)
 2. Your location coordinates (latitude and longitude)
 3. A smartphone with Ntfy.sh app installed
-4. API keys (all free):
-   - Groq API key (recommended) OR Hugging Face API key
-   - Optional: WeatherAPI.com and OpenWeatherMap keys for more data sources
+4. Optional API keys (all free):
+   - WeatherAPI.com and OpenWeatherMap keys for more data sources
+   - Groq or Hugging Face keys as backup AI providers (AI uses GitHub Models by default, no key needed)
 
 ## 🚀 Quick Start
 
@@ -45,16 +45,18 @@ Example: Paris, France = `48.8566, 2.3522`
 
 ### 3. Get API Keys (All Free)
 
-#### Required: AI API Key (Choose One)
+#### AI: GitHub Models (Default, No Setup)
 
-**Option A: Groq (Recommended - Faster)**
+The workflow uses [GitHub Models](https://github.com/marketplace/models) through the built-in `GITHUB_TOKEN`, so there's nothing to sign up for. The keys below are optional backups.
+
+**Optional backup: Groq**
 1. Go to [console.groq.com](https://console.groq.com)
 2. Sign up for free account
 3. Navigate to API Keys
 4. Create a new API key
 5. Free tier: 14,400 requests/day
 
-**Option B: Hugging Face**
+**Optional backup: Hugging Face**
 1. Go to [huggingface.co](https://huggingface.co)
 2. Sign up for free account
 3. Go to Settings → Access Tokens
@@ -110,18 +112,24 @@ Follow these steps to add your API keys and configuration as GitHub Secrets:
 | `LOCATION_LAT` | Your latitude | `48.8566` | ✅ Yes |
 | `LOCATION_LON` | Your longitude | `2.3522` | ✅ Yes |
 | `NTFY_TOPIC` | Your unique Ntfy.sh topic | `weather_john_xyz789` | ✅ Yes |
-| `GROQ_API_KEY` | Groq API key | `gsk_...` | ✅ Yes (or HF) |
-| `HUGGINGFACE_API_KEY` | Hugging Face token | `hf_...` | ⚠️ Alternative to Groq |
+| `GROQ_API_KEY` | Groq API key | `gsk_...` | Optional fallback |
+| `HUGGINGFACE_API_KEY` | Hugging Face token | `hf_...` | Optional fallback |
 | `WEATHERAPI_KEY` | WeatherAPI.com key | `abc123...` | ⭐ Recommended |
 | `OPENWEATHER_KEY` | OpenWeatherMap key | `xyz789...` | ⭐ Recommended |
 
-**Note**: You need either `GROQ_API_KEY` or `HUGGINGFACE_API_KEY`. The optional weather API keys improve accuracy but the agent will work without them.
+**Note**: No AI key is needed when running in GitHub Actions: the workflow uses **GitHub Models** (free) through the built-in `GITHUB_TOKEN`. Groq and Hugging Face keys are optional fallbacks, and if every AI provider fails the agent still sends rule-based clothing advice. The optional weather API keys improve accuracy but the agent will work without them.
+
+**Running locally**: set `GITHUB_TOKEN` to a GitHub personal access token with the `models:read` permission (or run `export GITHUB_TOKEN=$(gh auth token)`).
+
+**Optional — GitHub model**: the default is `openai/gpt-4.1-mini`. To choose another, add a repository **variable** (Settings → Secrets and variables → Actions → Variables tab) named `GITHUB_MODELS_MODEL` (see [github.com/marketplace/models](https://github.com/marketplace/models)). If the model is retired, the agent picks an available one automatically.
+
+**Optional — Groq model**: Groq retires models from time to time. To pick one yourself, add a repository **variable** (Settings → Secrets and variables → Actions → Variables tab) named `GROQ_MODEL`, e.g. `llama-3.3-70b-versatile` (see [console.groq.com/docs/models](https://console.groq.com/docs/models)). If it's unset or the model is retired, the agent picks an available model automatically.
 
 ### 6. Enable GitHub Actions
 
 1. Go to the **Actions** tab in your repository (top navigation bar)
 2. If you see a message about enabling workflows, click **"I understand my workflows, go ahead and enable them"**
-3. The workflow will now run automatically every day at 6 AM GMT+1
+3. The workflow will now run automatically every day at 04:30 UTC
 
 ### 7. Run GitHub Actions (Manual Testing)
 
@@ -154,7 +162,7 @@ After triggering a run:
 #### Option C: Automatic Scheduled Runs
 
 Once enabled, the workflow runs automatically:
-- **Schedule**: Every day at 6 AM GMT+1 (5 AM UTC)
+- **Schedule**: Every day at 04:30 UTC (05:30 GMT+1 / 06:30 GMT+2)
 - **No action needed**: Just wait for your morning notification!
 - **Check history**: Go to Actions tab to see all past runs
 

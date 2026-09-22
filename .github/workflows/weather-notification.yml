@@ -1,7 +1,7 @@
 name: Daily Weather Notification
 
 on:
-  # Scheduled run: Every day at 6 AM GMT+1 (5 AM UTC)
+  # Scheduled run: Every day at 04:30 UTC (05:30 GMT+1 / 06:30 GMT+2)
   schedule:
     - cron: '30 4 * * *'
   
@@ -11,6 +11,10 @@ on:
 jobs:
   weather-notification:
     runs-on: ubuntu-latest
+    # models: read lets the built-in GITHUB_TOKEN call GitHub Models (free AI)
+    permissions:
+      contents: read
+      models: read
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -34,7 +38,10 @@ jobs:
           LOCATION_LAT: ${{ secrets.LOCATION_LAT }}
           LOCATION_LON: ${{ secrets.LOCATION_LON }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_MODELS_MODEL: ${{ vars.GITHUB_MODELS_MODEL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
           HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
           OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}

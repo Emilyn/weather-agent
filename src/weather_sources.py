@@ -1,26 +1,36 @@
 """
 Weather data fetching from multiple free sources.
 Aggregates data from 5 different weather APIs for reliability.
+
+Every source is normalized to timestamps in the location's local time, then
+aligned to the same target hours before aggregation. Sources report at
+different resolutions (hourly vs 3-hourly) and start points, so combining
+them by list index would mix forecasts for different times.
 """
 
 import requests
 import statistics
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple, Callable
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Tuple
 import json
 import math
 from utils import fetch_api_data, safe_float, kmh_to_ms
 
 
+FORECAST_HOURS = 10
+# 3-hourly sources are matched to the nearest forecast point within this window
+MATCH_TOLERANCE = timedelta(minutes=90)
+
+
 class WeatherData:
     """Container for aggregated weather data."""
-    
+
     def __init__(self):
         self.hourly_data = []  # List of hourly forecasts
         self.sources_used = []
         self.reliability_score = 0.0
         self.source_consistency_scores = {}  # Track how consistent each source is
-    
+
     def to_dict(self):
         return {
             'hourly_data': self.hourly_data,
@@ -32,15 +42,17 @@ class WeatherData:
 
 class WeatherSources:
     """Fetch and aggregate weather data from multiple free sources."""
-    
-    def __init__(self, lat: float, lon: float, weatherapi_key: Optional[str] = None, 
+
+    def __init__(self, lat: float, lon: float, weatherapi_key: Optional[str] = None,
                  openweather_key: Optional[str] = None):
         self.lat = lat
         self.lon = lon
         self.weatherapi_key = weatherapi_key
         self.openweather_key = openweather_key
         self.timeout = 10
-        
+        # Location's offset from UTC, learned from the first source that reports it
+        self.utc_offset: Optional[timedelta] = None
+
         # Source reliability weights (based on typical API quality)
         # Higher weight = more reliable source
         self.source_weights = {
@@ -50,33 +62,66 @@ class WeatherSources:
             '7Timer': 0.8,           # Free but less detailed
             'wttr.in': 0.9           # Good coverage, free
         }
-    
-    def _process_hourly_data(
-        self,
-        data_items: List,
-        extractor: Callable[[any], Dict],
-        max_items: int = 10,
-        filter_func: Optional[Callable] = None
-    ) -> List[Dict]:
-        """Generic function to process hourly data from any source."""
-        hourly_data = []
-        for item in data_items:
-            if filter_func and not filter_func(item):
-                continue
-            if len(hourly_data) >= max_items:
-                break
-            hourly_data.append(extractor(item))
-        return hourly_data
-    
+
+    def _set_utc_offset(self, offset: timedelta):
+        """Record the location's UTC offset if no source has provided one yet."""
+        if self.utc_offset is None:
+            self.utc_offset = offset
+
+    def _location_now(self) -> datetime:
+        """Current time at the location (naive, truncated to the hour)."""
+        utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if self.utc_offset is None:
+            self._estimate_utc_offset_from_longitude()
+        local_now = utc_now + self.utc_offset
+        return local_now.replace(minute=0, second=0, microsecond=0)
+
+    def _estimate_utc_offset_from_longitude(self):
+        """Last resort when no source reported an offset: solar time zone (15° per hour)."""
+        self.utc_offset = timedelta(hours=round(self.lon / 15))
+        print(f"Warning: location UTC offset unknown, estimating {self.utc_offset} from longitude")
+
+    @staticmethod
+    def _utc_offset_from_wttr(data: Dict) -> Optional[timedelta]:
+        """
+        Derive the UTC offset from wttr.in's current observation, which gives both
+        local time ("2026-09-23 06:12 AM") and UTC time of day ("04:12 AM").
+        """
+        try:
+            current = data['current_condition'][0]
+            local = datetime.strptime(current['localObsDateTime'], '%Y-%m-%d %I:%M %p')
+            utc = datetime.strptime(current['observation_time'], '%I:%M %p')
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None
+        minutes = (local.hour * 60 + local.minute) - (utc.hour * 60 + utc.minute)
+        # The UTC time has no date, so wrap across midnight into the valid -12h..+14h range
+        if minutes < -12 * 60:
+            minutes += 24 * 60
+        elif minutes > 14 * 60:
+            minutes -= 24 * 60
+        return timedelta(minutes=round(minutes / 15) * 15)
+
+    @staticmethod
+    def _align_to_hours(items: List[Dict], target_times: List[datetime]) -> List[Optional[Dict]]:
+        """For each target hour, pick the nearest forecast item within MATCH_TOLERANCE."""
+        aligned = []
+        for target in target_times:
+            best = min(items, key=lambda item: abs(item['time'] - target), default=None)
+            if best is not None and abs(best['time'] - target) <= MATCH_TOLERANCE:
+                aligned.append(best)
+            else:
+                aligned.append(None)
+        return aligned
+
     def fetch_open_meteo(self) -> Optional[List[Dict]]:
-        """Fetch from Open-Meteo (no API key needed)."""
+        """Fetch from Open-Meteo (no API key needed). Times are location-local."""
         data = fetch_api_data(
             url="https://api.open-meteo.com/v1/forecast",
             params={
                 'latitude': self.lat,
                 'longitude': self.lon,
                 'hourly': 'temperature_2m,precipitation,rain,snowfall,windspeed_10m,relativehumidity_2m,weathercode',
-                'forecast_days': 1,
+                'forecast_days': 2,  # Covers runs late in the day
                 'timezone': 'auto'
             },
             timeout=self.timeout,
@@ -84,45 +129,45 @@ class WeatherSources:
         )
         if not data:
             return None
-        
-        current_hour = datetime.now().hour
-        hourly_items = list(zip(
-            data['hourly']['time'][current_hour:current_hour+10],
-            data['hourly']['temperature_2m'][current_hour:current_hour+10],
-            data['hourly']['precipitation'][current_hour:current_hour+10],
-            data['hourly']['rain'][current_hour:current_hour+10],
-            data['hourly']['snowfall'][current_hour:current_hour+10],
-            data['hourly']['windspeed_10m'][current_hour:current_hour+10],
-            data['hourly']['relativehumidity_2m'][current_hour:current_hour+10],
-            data['hourly']['weathercode'][current_hour:current_hour+10]
-        ))
-        
-        return self._process_hourly_data(
-            hourly_items,
-            lambda item: {
-                'time': item[0],
-                'temperature': item[1],
-                'precipitation': item[2],
-                'rain': item[3],
-                'snow': item[4],
-                'wind_speed': item[5],
-                'humidity': item[6],
-                'condition': self._decode_wmo_code(item[7])
-            },
-            max_items=10
-        )
-    
+
+        if 'utc_offset_seconds' in data:
+            self._set_utc_offset(timedelta(seconds=data['utc_offset_seconds']))
+
+        hourly = data['hourly']
+        return [
+            {
+                'time': datetime.fromisoformat(time),
+                'temperature': temp,
+                'precipitation': precip,
+                'rain': rain,
+                'snow': snow,
+                'wind_speed': kmh_to_ms(wind) if wind is not None else None,
+                'humidity': humidity,
+                'condition': self._decode_wmo_code(code)
+            }
+            for time, temp, precip, rain, snow, wind, humidity, code in zip(
+                hourly['time'],
+                hourly['temperature_2m'],
+                hourly['precipitation'],
+                hourly['rain'],
+                hourly['snowfall'],
+                hourly['windspeed_10m'],
+                hourly['relativehumidity_2m'],
+                hourly['weathercode']
+            )
+        ]
+
     def fetch_weatherapi(self) -> Optional[List[Dict]]:
-        """Fetch from WeatherAPI.com (free tier)."""
+        """Fetch from WeatherAPI.com (free tier). Times are location-local."""
         if not self.weatherapi_key:
             return None
-        
+
         data = fetch_api_data(
             url="http://api.weatherapi.com/v1/forecast.json",
             params={
                 'key': self.weatherapi_key,
                 'q': f"{self.lat},{self.lon}",
-                'hours': 24,
+                'days': 2,  # Covers runs late in the day
                 'aqi': 'no'
             },
             timeout=self.timeout,
@@ -130,14 +175,17 @@ class WeatherSources:
         )
         if not data:
             return None
-        
-        current_time = datetime.now()
-        hours = data['forecast']['forecastday'][0]['hour']
-        
-        return self._process_hourly_data(
-            hours,
-            lambda hour: {
-                'time': hour['time'],
+
+        location = data.get('location', {})
+        if 'localtime_epoch' in location and 'localtime' in location:
+            local = datetime.strptime(location['localtime'], '%Y-%m-%d %H:%M')
+            utc = datetime.fromtimestamp(location['localtime_epoch'], timezone.utc).replace(tzinfo=None)
+            # Round to the nearest 15 minutes (all real offsets are multiples of 15)
+            self._set_utc_offset(timedelta(minutes=round((local - utc).total_seconds() / 900) * 15))
+
+        return [
+            {
+                'time': datetime.strptime(hour['time'], '%Y-%m-%d %H:%M'),
                 'temperature': hour['temp_c'],
                 'precipitation': hour['precip_mm'],
                 'rain': hour.get('precip_mm', 0) if hour.get('snow_cm', 0) == 0 else 0,
@@ -145,16 +193,16 @@ class WeatherSources:
                 'wind_speed': kmh_to_ms(hour['wind_kph']),
                 'humidity': hour['humidity'],
                 'condition': hour['condition']['text']
-            },
-            max_items=10,
-            filter_func=lambda hour: datetime.strptime(hour['time'], '%Y-%m-%d %H:%M') >= current_time
-        )
-    
+            }
+            for day in data['forecast']['forecastday']
+            for hour in day['hour']
+        ]
+
     def fetch_openweathermap(self) -> Optional[List[Dict]]:
-        """Fetch from OpenWeatherMap (free tier)."""
+        """Fetch from OpenWeatherMap (free tier, 3-hourly). Times are UTC epochs."""
         if not self.openweather_key:
             return None
-        
+
         data = fetch_api_data(
             url="https://api.openweathermap.org/data/2.5/forecast",
             params={
@@ -169,11 +217,13 @@ class WeatherSources:
         )
         if not data:
             return None
-        
-        return self._process_hourly_data(
-            data['list'],
-            lambda item: {
-                'time': item['dt_txt'],
+
+        offset = timedelta(seconds=data.get('city', {}).get('timezone', 0))
+        self._set_utc_offset(offset)
+
+        return [
+            {
+                'time': datetime.fromtimestamp(item['dt'], timezone.utc).replace(tzinfo=None) + offset,
                 'temperature': item['main']['temp'],
                 'precipitation': item.get('rain', {}).get('3h', 0) / 3,  # Convert 3h to 1h avg
                 'rain': item.get('rain', {}).get('3h', 0) / 3,
@@ -181,12 +231,12 @@ class WeatherSources:
                 'wind_speed': item['wind']['speed'],
                 'humidity': item['main']['humidity'],
                 'condition': item['weather'][0]['description']
-            },
-            max_items=10
-        )
-    
+            }
+            for item in data['list']
+        ]
+
     def fetch_7timer(self) -> Optional[List[Dict]]:
-        """Fetch from 7Timer (no API key needed)."""
+        """Fetch from 7Timer (no API key needed, 3-hourly). Times are offsets from a UTC init time."""
         data = fetch_api_data(
             url="http://www.7timer.info/bin/api.pl",
             params={
@@ -200,24 +250,29 @@ class WeatherSources:
         )
         if not data:
             return None
-        
-        return self._process_hourly_data(
-            data['dataseries'],
-            lambda item: {
-                'time': str(item['timepoint']),
+
+        if self.utc_offset is None:
+            print("7Timer skipped: location UTC offset unknown, cannot convert its UTC times")
+            return None
+
+        init = datetime.strptime(data['init'], '%Y%m%d%H') + self.utc_offset
+        return [
+            {
+                'time': init + timedelta(hours=item['timepoint']),
                 'temperature': item['temp2m'],
                 'precipitation': self._estimate_precip_from_weather(item['weather']),
                 'rain': self._estimate_rain_from_weather(item['weather']),
                 'snow': self._estimate_snow_from_weather(item['weather']),
-                'wind_speed': kmh_to_ms(item['wind10m']['speed']),  # Convert km/h to m/s (speed is already in km/h)
-                'humidity': item.get('rh2m', 50),
+                # 7Timer's 'civil' product reports wind speed on a 1-8 scale, not km/h
+                'wind_speed': self._7timer_wind_class_to_ms(item['wind10m']['speed']),
+                'humidity': safe_float(str(item.get('rh2m', '50')).rstrip('%'), 50.0),
                 'condition': item['weather']
-            },
-            max_items=10
-        )
-    
+            }
+            for item in data['dataseries']
+        ]
+
     def fetch_wttr(self) -> Optional[List[Dict]]:
-        """Fetch from wttr.in (no API key needed)."""
+        """Fetch from wttr.in (no API key needed, 3-hourly). Times are location-local."""
         data = fetch_api_data(
             url=f"https://wttr.in/{self.lat},{self.lon}",
             params={'format': 'j1'},
@@ -226,11 +281,15 @@ class WeatherSources:
         )
         if not data:
             return None
-        
-        return self._process_hourly_data(
-            data['weather'][0]['hourly'],
-            lambda hour: {
-                'time': hour['time'],
+
+        offset = self._utc_offset_from_wttr(data)
+        if offset is not None:
+            self._set_utc_offset(offset)
+
+        return [
+            {
+                # 'time' is "0", "300", ..., "2100" (HHMM) on the given local date
+                'time': datetime.strptime(day['date'], '%Y-%m-%d') + timedelta(hours=int(hour['time']) // 100),
                 'temperature': safe_float(hour['tempC']),
                 'precipitation': safe_float(hour['precipMM']),
                 'rain': safe_float(hour.get('precipMM', 0)) if 'snow' not in hour.get('weatherDesc', [{}])[0].get('value', '').lower() else 0,
@@ -238,10 +297,11 @@ class WeatherSources:
                 'wind_speed': kmh_to_ms(safe_float(hour['windspeedKmph'])),
                 'humidity': safe_float(hour['humidity']),
                 'condition': hour['weatherDesc'][0]['value']
-            },
-            max_items=10
-        )
-    
+            }
+            for day in data['weather']
+            for hour in day['hourly']
+        ]
+
     def _remove_outliers(self, values: List[float], method: str = 'iqr') -> List[float]:
         """Remove outliers from a list of values using IQR method."""
         if len(values) < 3:
@@ -344,7 +404,7 @@ class WeatherSources:
             for hour_idx in range(num_hours):
                 source_vals = {}
                 for name, data in all_source_data.items():
-                    if hour_idx < len(data):
+                    if hour_idx < len(data) and data[hour_idx] is not None:
                         try:
                             source_vals[name] = {
                                 'temp': float(data[hour_idx].get('temperature', 0)),
@@ -397,12 +457,26 @@ class WeatherSources:
             'Open-Meteo': self.fetch_open_meteo(),
             'WeatherAPI': self.fetch_weatherapi(),
             'OpenWeatherMap': self.fetch_openweathermap(),
-            '7Timer': self.fetch_7timer(),
             'wttr.in': self.fetch_wttr()
         }
+        # 7Timer reports UTC times, so fetch it last, once another source has told us
+        # the location's UTC offset (or fall back to a longitude-based estimate)
+        if self.utc_offset is None:
+            self._estimate_utc_offset_from_longitude()
+        sources['7Timer'] = self.fetch_7timer()
         
-        # Filter successful sources
-        successful_sources = {k: v for k, v in sources.items() if v is not None}
+        # Align every source to the same local target hours; drop sources with no overlap
+        start = self._location_now()
+        target_times = [start + timedelta(hours=i) for i in range(FORECAST_HOURS)]
+        successful_sources = {}
+        for name, items in sources.items():
+            if not items:
+                continue
+            aligned = self._align_to_hours(items, target_times)
+            if any(item is not None for item in aligned):
+                successful_sources[name] = aligned
+            else:
+                print(f"{name} skipped: no forecast points near {start:%Y-%m-%d %H:%M}")
         
         print(f"Successfully fetched from {len(successful_sources)} sources: {list(successful_sources.keys())}")
         
@@ -414,25 +488,15 @@ class WeatherSources:
         weather_data.sources_used = list(successful_sources.keys())
         weather_data.reliability_score = len(successful_sources) / 5.0
         
-        # Find the minimum number of hours available across all sources
-        source_lengths = []
-        for source_name, source_data in successful_sources.items():
-            if not isinstance(source_data, list):
-                raise Exception(f"Source {source_name} returned invalid data type: {type(source_data)}")
-            source_lengths.append(len(source_data))
-        
-        if not source_lengths:
-            raise Exception("No valid source data available")
-        
-        min_hours = min(source_lengths)
+        num_hours = len(target_times)
         
         # Calculate source consistency scores
-        consistency_scores = self._calculate_source_consistency(successful_sources, min_hours)
+        consistency_scores = self._calculate_source_consistency(successful_sources, num_hours)
         weather_data.source_consistency_scores = consistency_scores
         
         print(f"Source consistency scores: {consistency_scores}")
         
-        for hour_idx in range(min_hours):
+        for hour_idx in range(num_hours):
             temp_data = []  # List of (value, weight) tuples
             precips = []
             rains = []
@@ -442,7 +506,7 @@ class WeatherSources:
             conditions = []
             
             for source_name, source_data in successful_sources.items():
-                if hour_idx < len(source_data):
+                if source_data[hour_idx] is not None:
                     try:
                         hour_data = source_data[hour_idx]
                         
@@ -533,6 +597,7 @@ class WeatherSources:
             # Calculate consensus values with improved accuracy
             aggregated_hour = {
                 'hour': hour_idx,
+                'time': target_times[hour_idx].strftime('%Y-%m-%d %H:%M'),
                 'temperature': round(temp_final, 1),
                 'precipitation': round(precip_final, 2),
                 'rain': round(rain_final, 2),
@@ -580,6 +645,12 @@ class WeatherSources:
             99: 'Thunderstorm with hail'
         }
         return wmo_codes.get(code, 'Unknown')
+    
+    @staticmethod
+    def _7timer_wind_class_to_ms(wind_class: int) -> float:
+        """Convert 7Timer's 1-8 wind speed class to the midpoint of its m/s range."""
+        class_midpoints = {1: 0.15, 2: 1.85, 3: 5.7, 4: 9.4, 5: 14.0, 6: 20.85, 7: 28.55, 8: 32.6}
+        return class_midpoints.get(int(safe_float(wind_class, 1)), 0.15)
     
     @staticmethod
     def _estimate_precip_from_weather(weather: str) -> float:
