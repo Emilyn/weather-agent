@@ -47,11 +47,11 @@ This document provides a comprehensive guide for developers working on the Weath
    LOCATION_LAT=48.8566
    LOCATION_LON=2.3522
    NTFY_TOPIC=your_topic_name
-   GROQ_API_KEY=your_groq_key
+   GITHUB_TOKEN=your_github_token   # or: export GITHUB_TOKEN=$(gh auth token)
    # Optional:
+   GROQ_API_KEY=your_groq_key
    WEATHERAPI_KEY=your_weatherapi_key
    OPENWEATHER_KEY=your_openweather_key
-   HUGGINGFACE_API_KEY=your_hf_key
    ```
 
 5. **Run the agent locally**
@@ -129,7 +129,7 @@ The Weather AI Agent follows a modular architecture with clear separation of con
 
 #### 3. `ai_recommender.py` - AI Recommendations
 - Generates clothing recommendations using AI
-- Supports multiple AI providers (Groq, Hugging Face)
+- Tries AI providers in order (GitHub Models, then Groq), falling back to rule-based advice
 - Implements iterative refinement with reflection
 - Formats notifications
 
@@ -256,7 +256,6 @@ if not reflection.passed:
 - Checks required sections
 - Ensures proper formatting
 
-See [REFLECTION_PATTERN.md](REFLECTION_PATTERN.md) for detailed documentation.
 
 ### 3. Strategy Pattern
 
@@ -267,10 +266,9 @@ The codebase uses strategy pattern for interchangeable components.
 ```python
 class AIRecommender:
     def generate_recommendation(self, weather_data: Dict) -> str:
-        if self.groq_api_key:
-            return self._generate_with_groq(weather_data)
-        elif self.hf_api_key:
-            return self._generate_with_huggingface(weather_data)
+        # Each configured provider is tried in turn; see _generate_with_feedback()
+        providers = [("GitHub Models", self._generate_with_github_models),
+                     ("Groq", self._generate_with_groq)]
 ```
 
 **Benefits:**

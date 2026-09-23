@@ -3,7 +3,7 @@ Reflection Engine - Implements self-evaluation and iterative refinement pattern.
 The agent generates outputs, then critically evaluates them, and revises if needed.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List
 from dataclasses import dataclass
 from enum import Enum
 import statistics
@@ -42,7 +42,6 @@ class ReflectionEngine:
             quality_threshold: Minimum quality score (0.0-1.0) to pass evaluation
         """
         self.quality_threshold = quality_threshold
-        self.max_iterations = 3  # Maximum refinement iterations
     
     def reflect_on_weather_data(self, weather_data: Dict) -> ReflectionResult:
         """
@@ -64,7 +63,7 @@ class ReflectionEngine:
         
         # Check data completeness
         if len(hourly_data) < 5:
-            issues.append(f"Only {len(hourly_data)} hours of data available (recommended: 10)")
+            issues.append(f"Only {len(hourly_data)} hours of data available")
             suggestions.append("Consider fetching from additional sources")
             scores.append(0.5)
         else:
@@ -358,36 +357,3 @@ class ReflectionEngine:
             suggestions=suggestions,
             passed=passed
         )
-    
-    def refine_with_feedback(
-        self,
-        initial_output: Any,
-        reflection_result: ReflectionResult,
-        refinement_func: callable
-    ) -> Tuple[Any, ReflectionResult]:
-        """
-        Refine output based on reflection feedback.
-        
-        Args:
-            initial_output: The initial output to refine
-            reflection_result: Result from reflection evaluation
-            refinement_func: Function that takes (output, issues, suggestions) and returns refined output
-            
-        Returns:
-            Tuple of (refined_output, new_reflection_result)
-        """
-        if reflection_result.passed:
-            return initial_output, reflection_result
-        
-        # Attempt refinement
-        try:
-            refined_output = refinement_func(
-                initial_output,
-                reflection_result.issues,
-                reflection_result.suggestions
-            )
-            return refined_output, reflection_result
-        except Exception as e:
-            # If refinement fails, return original with warning
-            return initial_output, reflection_result
-
