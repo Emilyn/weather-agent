@@ -37,7 +37,7 @@ def test_environment():
     print("\n🔧 Testing environment variables...")
     required = ['LOCATION_LAT', 'LOCATION_LON', 'NTFY_TOPIC']
     optional = ['WEATHERAPI_KEY', 'OPENWEATHER_KEY']
-    ai_keys = ['GITHUB_TOKEN', 'GROQ_API_KEY', 'HUGGINGFACE_API_KEY']
+    ai_keys = ['GITHUB_TOKEN', 'GROQ_API_KEY']
     
     all_ok = True
     for var in required:
@@ -54,7 +54,7 @@ def test_environment():
             has_ai_key = True
     
     if not has_ai_key:
-        print_error("No AI credential set (GITHUB_TOKEN, GROQ_API_KEY or HUGGINGFACE_API_KEY is required)", indent=3)
+        print_error("No AI credential set (GITHUB_TOKEN or GROQ_API_KEY is required)", indent=3)
         all_ok = False
     
     for var in optional:
@@ -111,7 +111,6 @@ def test_weather_sources():
         # Test individual sources
         sources_to_test = [
             ('Open-Meteo', weather.fetch_open_meteo),
-            ('7Timer', weather.fetch_7timer),
             ('wttr.in', weather.fetch_wttr),
         ]
         

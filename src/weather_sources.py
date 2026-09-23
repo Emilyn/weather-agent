@@ -1,25 +1,25 @@
 """
 Weather data fetching from multiple free sources.
-Aggregates data from 5 different weather APIs for reliability.
+Aggregates data from 4 different weather APIs for reliability.
 
 Every source is normalized to timestamps in the location's local time, then
-aligned to the same target hours before aggregation. Sources report at
-different resolutions (hourly vs 3-hourly) and start points, so combining
-them by list index would mix forecasts for different times.
+aligned to the same target hours (now until the end of the day) before
+aggregation. 3-hourly sources are linearly interpolated to each hour, so a
+forecast point several hours away never stands in for the current hour.
 """
 
-import requests
 import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
-import json
 import math
 from utils import fetch_api_data, safe_float, kmh_to_ms
 
 
-FORECAST_HOURS = 10
-# 3-hourly sources are matched to the nearest forecast point within this window
-MATCH_TOLERANCE = timedelta(minutes=90)
+# Forecast points further apart than this are not interpolated between
+MAX_INTERPOLATION_GAP = timedelta(hours=3)
+# With no points on both sides, use a point this close to the target hour
+MATCH_TOLERANCE = timedelta(minutes=30)
+INTERPOLATED_FIELDS = ('temperature', 'precipitation', 'rain', 'snow', 'wind_speed', 'humidity')
 
 
 class WeatherData:
@@ -59,7 +59,6 @@ class WeatherSources:
             'Open-Meteo': 1.0,      # High quality, free, no key needed
             'WeatherAPI': 1.2,       # Commercial API, generally accurate
             'OpenWeatherMap': 1.1,   # Well-established, reliable
-            '7Timer': 0.8,           # Free but less detailed
             'wttr.in': 0.9           # Good coverage, free
         }
 
@@ -82,35 +81,32 @@ class WeatherSources:
         print(f"Warning: location UTC offset unknown, estimating {self.utc_offset} from longitude")
 
     @staticmethod
-    def _utc_offset_from_wttr(data: Dict) -> Optional[timedelta]:
-        """
-        Derive the UTC offset from wttr.in's current observation, which gives both
-        local time ("2026-09-23 06:12 AM") and UTC time of day ("04:12 AM").
-        """
-        try:
-            current = data['current_condition'][0]
-            local = datetime.strptime(current['localObsDateTime'], '%Y-%m-%d %I:%M %p')
-            utc = datetime.strptime(current['observation_time'], '%I:%M %p')
-        except (KeyError, IndexError, TypeError, ValueError):
-            return None
-        minutes = (local.hour * 60 + local.minute) - (utc.hour * 60 + utc.minute)
-        # The UTC time has no date, so wrap across midnight into the valid -12h..+14h range
-        if minutes < -12 * 60:
-            minutes += 24 * 60
-        elif minutes > 14 * 60:
-            minutes -= 24 * 60
-        return timedelta(minutes=round(minutes / 15) * 15)
-
-    @staticmethod
     def _align_to_hours(items: List[Dict], target_times: List[datetime]) -> List[Optional[Dict]]:
-        """For each target hour, pick the nearest forecast item within MATCH_TOLERANCE."""
+        """
+        Estimate each target hour from a source's forecast points: linear interpolation
+        between the points either side (at most MAX_INTERPOLATION_GAP apart), or the
+        nearest point within MATCH_TOLERANCE. None if the source doesn't cover the hour.
+        """
+        points = sorted(items, key=lambda item: item['time'])
         aligned = []
         for target in target_times:
-            best = min(items, key=lambda item: abs(item['time'] - target), default=None)
-            if best is not None and abs(best['time'] - target) <= MATCH_TOLERANCE:
-                aligned.append(best)
+            before = next((p for p in reversed(points) if p['time'] <= target), None)
+            after = next((p for p in points if p['time'] >= target), None)
+            if before is not None and before['time'] == target:
+                aligned.append(before)
+            elif before is not None and after is not None and after['time'] - before['time'] <= MAX_INTERPOLATION_GAP:
+                fraction = (target - before['time']) / (after['time'] - before['time'])
+                hour = {'time': target, 'condition': (before if fraction < 0.5 else after)['condition']}
+                for field in INTERPOLATED_FIELDS:
+                    start, end = safe_float(before.get(field)), safe_float(after.get(field))
+                    hour[field] = start + (end - start) * fraction
+                aligned.append(hour)
             else:
-                aligned.append(None)
+                nearest = min(points, key=lambda p: abs(p['time'] - target), default=None)
+                if nearest is not None and abs(nearest['time'] - target) <= MATCH_TOLERANCE:
+                    aligned.append(nearest)
+                else:
+                    aligned.append(None)
         return aligned
 
     def fetch_open_meteo(self) -> Optional[List[Dict]]:
@@ -235,42 +231,6 @@ class WeatherSources:
             for item in data['list']
         ]
 
-    def fetch_7timer(self) -> Optional[List[Dict]]:
-        """Fetch from 7Timer (no API key needed, 3-hourly). Times are offsets from a UTC init time."""
-        data = fetch_api_data(
-            url="http://www.7timer.info/bin/api.pl",
-            params={
-                'lon': self.lon,
-                'lat': self.lat,
-                'product': 'civil',
-                'output': 'json'
-            },
-            timeout=self.timeout,
-            source_name="7Timer"
-        )
-        if not data:
-            return None
-
-        if self.utc_offset is None:
-            print("7Timer skipped: location UTC offset unknown, cannot convert its UTC times")
-            return None
-
-        init = datetime.strptime(data['init'], '%Y%m%d%H') + self.utc_offset
-        return [
-            {
-                'time': init + timedelta(hours=item['timepoint']),
-                'temperature': item['temp2m'],
-                'precipitation': self._estimate_precip_from_weather(item['weather']),
-                'rain': self._estimate_rain_from_weather(item['weather']),
-                'snow': self._estimate_snow_from_weather(item['weather']),
-                # 7Timer's 'civil' product reports wind speed on a 1-8 scale, not km/h
-                'wind_speed': self._7timer_wind_class_to_ms(item['wind10m']['speed']),
-                'humidity': safe_float(str(item.get('rh2m', '50')).rstrip('%'), 50.0),
-                'condition': item['weather']
-            }
-            for item in data['dataseries']
-        ]
-
     def fetch_wttr(self) -> Optional[List[Dict]]:
         """Fetch from wttr.in (no API key needed, 3-hourly). Times are location-local."""
         data = fetch_api_data(
@@ -281,10 +241,6 @@ class WeatherSources:
         )
         if not data:
             return None
-
-        offset = self._utc_offset_from_wttr(data)
-        if offset is not None:
-            self._set_utc_offset(offset)
 
         return [
             {
@@ -356,19 +312,8 @@ class WeatherSources:
         
         return pairs[-1][0] if pairs else 0.0
     
-    def _weighted_mean(self, values: List[float], weights: List[float]) -> float:
-        """Calculate weighted mean."""
-        if not values or not weights or len(values) != len(weights):
-            return statistics.mean(values) if values else 0.0
-        
-        total_weight = sum(weights)
-        if total_weight == 0:
-            return statistics.mean(values)
-        
-        return sum(v * w for v, w in zip(values, weights)) / total_weight
-    
-    def _calculate_confidence_interval(self, values: List[float], confidence: float = 0.95) -> Tuple[float, float]:
-        """Calculate confidence interval for values."""
+    def _calculate_confidence_interval(self, values: List[float]) -> Tuple[float, float]:
+        """Calculate an approximate 95% confidence interval for values."""
         if len(values) < 2:
             return (values[0] if values else 0.0, values[0] if values else 0.0)
         
@@ -459,15 +404,12 @@ class WeatherSources:
             'OpenWeatherMap': self.fetch_openweathermap(),
             'wttr.in': self.fetch_wttr()
         }
-        # 7Timer reports UTC times, so fetch it last, once another source has told us
-        # the location's UTC offset (or fall back to a longitude-based estimate)
-        if self.utc_offset is None:
-            self._estimate_utc_offset_from_longitude()
-        sources['7Timer'] = self.fetch_7timer()
         
-        # Align every source to the same local target hours; drop sources with no overlap
+        # Align every source to the same local target hours, from now until the end
+        # of the day; drop sources with no overlap
         start = self._location_now()
-        target_times = [start + timedelta(hours=i) for i in range(FORECAST_HOURS)]
+        hours_left_today = 24 - start.hour
+        target_times = [start + timedelta(hours=i) for i in range(hours_left_today)]
         successful_sources = {}
         for name, items in sources.items():
             if not items:
@@ -486,7 +428,7 @@ class WeatherSources:
         # Aggregate data for each hour
         weather_data = WeatherData()
         weather_data.sources_used = list(successful_sources.keys())
-        weather_data.reliability_score = len(successful_sources) / 5.0
+        weather_data.reliability_score = len(successful_sources) / len(self.source_weights)
         
         num_hours = len(target_times)
         
@@ -585,11 +527,8 @@ class WeatherSources:
             wind_final = self._trimmed_mean(winds_clean if winds_clean else winds) if winds else 0.0
             humidity_final = self._trimmed_mean(humidities_clean if humidities_clean else humidities) if humidities else 50.0
             
-            # Calculate confidence intervals
+            # Calculate confidence interval
             temp_ci = self._calculate_confidence_interval(temps_clean if temps_clean else temps)
-            precip_ci = self._calculate_confidence_interval(precips_clean if precips_clean else precips) if precips else (0.0, 0.0)
-            wind_ci = self._calculate_confidence_interval(winds_clean if winds_clean else winds) if winds else (0.0, 0.0)
-            humidity_ci = self._calculate_confidence_interval(humidities_clean if humidities_clean else humidities) if humidities else (50.0, 50.0)
             
             # Calculate standard deviation for uncertainty measure
             temp_std = statistics.stdev(temps_clean if temps_clean else temps) if len(temps) > 1 else 0.0
@@ -645,47 +584,6 @@ class WeatherSources:
             99: 'Thunderstorm with hail'
         }
         return wmo_codes.get(code, 'Unknown')
-    
-    @staticmethod
-    def _7timer_wind_class_to_ms(wind_class: int) -> float:
-        """Convert 7Timer's 1-8 wind speed class to the midpoint of its m/s range."""
-        class_midpoints = {1: 0.15, 2: 1.85, 3: 5.7, 4: 9.4, 5: 14.0, 6: 20.85, 7: 28.55, 8: 32.6}
-        return class_midpoints.get(int(safe_float(wind_class, 1)), 0.15)
-    
-    @staticmethod
-    def _estimate_precip_from_weather(weather: str) -> float:
-        """Estimate precipitation from weather description."""
-        weather_lower = weather.lower()
-        if 'rain' in weather_lower or 'shower' in weather_lower:
-            return 2.0
-        elif 'drizzle' in weather_lower:
-            return 0.5
-        elif 'snow' in weather_lower:
-            return 1.0
-        return 0.0
-    
-    @staticmethod
-    def _estimate_rain_from_weather(weather: str) -> float:
-        """Estimate rain from weather description."""
-        weather_lower = weather.lower()
-        if 'rain' in weather_lower or 'shower' in weather_lower:
-            return 2.0
-        elif 'drizzle' in weather_lower:
-            return 0.5
-        return 0.0
-    
-    @staticmethod
-    def _estimate_snow_from_weather(weather: str) -> float:
-        """Estimate snow from weather description."""
-        weather_lower = weather.lower()
-        if 'snow' in weather_lower:
-            if 'heavy' in weather_lower:
-                return 5.0
-            elif 'light' in weather_lower or 'slight' in weather_lower:
-                return 1.0
-            else:
-                return 2.0
-        return 0.0
 
 
 if __name__ == "__main__":
@@ -699,8 +597,8 @@ if __name__ == "__main__":
     
     print(f"\nReliability Score: {data.reliability_score}")
     print(f"Sources Used: {data.sources_used}")
-    print("\nNext 10 hours forecast:")
+    print("\nForecast for the rest of today:")
     for hour in data.hourly_data:
-        print(f"Hour +{hour['hour']}: {hour['temperature']}°C, {hour['condition']}, "
+        print(f"{hour['time'][11:]}: {hour['temperature']}°C, {hour['condition']}, "
               f"Precip: {hour['precipitation']}mm, Wind: {hour['wind_speed']}m/s")
 
