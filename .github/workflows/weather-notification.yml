@@ -1,38 +1,106 @@
 name: Daily Weather Notification
 
 on:
-  # Scheduled run: Every day at 04:30 UTC (05:30 GMT+1 / 06:30 GMT+2)
+  # Backup schedule. GitHub cron runs in UTC and is often delayed (from minutes to
+  # hours), so the reliable 06:00 trigger is an external scheduler calling
+  # workflow_dispatch with trigger=scheduler (see README). These two crons cover
+  # 06:00 Stockholm time in both summer (04:00 UTC) and winter (05:00 UTC); the
+  # gate job below skips runs that are too early or when today's notification
+  # was already sent.
   schedule:
-    - cron: '30 4 * * *'
-  
-  # Manual trigger for testing
+    - cron: '0 4 * * *'
+    - cron: '0 5 * * *'
+
   workflow_dispatch:
+    inputs:
+      trigger:
+        description: "'manual' always sends; 'scheduler' sends at most once per day"
+        default: manual
+        type: choice
+        options: [manual, scheduler]
+
+# Run one at a time so the once-per-day check sees earlier runs' results
+concurrency:
+  group: weather-notification
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NOTIFY_TIMEZONE: ${{ vars.NOTIFY_TIMEZONE || 'Europe/Stockholm' }}
+  NOTIFY_TIME: ${{ vars.NOTIFY_TIME || '06:00' }}
 
 jobs:
-  weather-notification:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      send: ${{ steps.check.outputs.send }}
+    steps:
+      - name: Decide whether to send today's notification
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          TRIGGER: ${{ inputs.trigger }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$TRIGGER" != "scheduler" ]; then
+            echo "Manual run: sending."
+            echo "send=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          local_now=$(TZ="$NOTIFY_TIMEZONE" date +%H:%M)
+          to_minutes() { echo $(( 10#${1%:*} * 60 + 10#${1#*:} )); }
+          # Allow a few minutes of clock skew for the external scheduler
+          if (( $(to_minutes "$local_now") < $(to_minutes "$NOTIFY_TIME") - 5 )); then
+            echo "It's $local_now in $NOTIFY_TIMEZONE, before $NOTIFY_TIME: skipping (the later trigger will send)."
+            echo "send=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          today_start=$(TZ="$NOTIFY_TIMEZONE" date -d "today 00:00" --iso-8601=seconds)
+          run_ids=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/weather-notification.yml/runs" \
+            -f created=">=$today_start" -F per_page=50 \
+            --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID) | .id")
+          for id in $run_ids; do
+            sent=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" \
+              --jq '[.jobs[] | select(.name == "notify" and .conclusion == "success")] | length')
+            if [ "$sent" != "0" ]; then
+              echo "Today's notification was already sent by run $id: skipping."
+              echo "send=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "It's $local_now in $NOTIFY_TIMEZONE and nothing sent yet today: sending."
+          echo "send=true" >> "$GITHUB_OUTPUT"
+
+  notify:
+    name: notify
+    needs: gate
+    if: needs.gate.outputs.send == 'true'
     runs-on: ubuntu-latest
     # models: read lets the built-in GITHUB_TOKEN call GitHub Models (free AI)
     permissions:
       contents: read
       models: read
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-      
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: Run weather agent
         env:
           LOCATION_LAT: ${{ secrets.LOCATION_LAT }}
@@ -42,10 +110,8 @@ jobs:
           GITHUB_MODELS_MODEL: ${{ vars.GITHUB_MODELS_MODEL }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ vars.GROQ_MODEL }}
-          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
           WEATHERAPI_KEY: ${{ secrets.WEATHERAPI_KEY }}
           OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
         run: |
           cd src
           python weather_agent.py
-

@@ -6,8 +6,7 @@ Applies DRY principles by centralizing repeated logic.
 import os
 import sys
 import requests
-from typing import Dict, Optional, Any, Callable, Tuple
-from functools import wraps
+from typing import Dict, Optional, Any, Tuple
 
 
 def load_env_file():
@@ -107,30 +106,6 @@ def fetch_api_data(
         return None
 
 
-def handle_step_execution(step_name: str, step_number: int = None):
-    """
-    Decorator for handling step execution with consistent error handling.
-    Prints step header and handles exceptions uniformly.
-    """
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            if step_number:
-                print(f"\n{step_name} Step {step_number}: {func.__name__.replace('_', ' ').title()}...")
-            else:
-                print(f"\n{step_name} {func.__name__.replace('_', ' ').title()}...")
-            
-            try:
-                result = func(*args, **kwargs)
-                print(f"✅ {step_name} completed successfully")
-                return result
-            except Exception as e:
-                print(f"❌ Failed {step_name.lower()}: {e}")
-                raise
-        return wrapper
-    return decorator
-
-
 def print_success(message: str, indent: int = 0):
     """Print a success message with consistent formatting."""
     indent_str = " " * indent
@@ -147,50 +122,3 @@ def print_warning(message: str, indent: int = 0):
     """Print a warning message with consistent formatting."""
     indent_str = " " * indent
     print(f"{indent_str}⚠️  {message}")
-
-
-def extract_weather_fields(
-    data: Dict,
-    field_mapping: Dict[str, str],
-    converters: Optional[Dict[str, Callable]] = None
-) -> Dict[str, Any]:
-    """
-    Extract weather fields from API response using a field mapping.
-    
-    Args:
-        data: API response dictionary
-        field_mapping: Dict mapping output field names to nested keys (e.g., {'temperature': 'main.temp'})
-        converters: Optional dict of field names to conversion functions
-    
-    Returns:
-        Dict with extracted and converted values
-    """
-    result = {}
-    converters = converters or {}
-    
-    for output_field, source_path in field_mapping.items():
-        # Navigate nested dictionary using dot notation
-        value = data
-        for key in source_path.split('.'):
-            if isinstance(value, dict):
-                value = value.get(key)
-            elif isinstance(value, list) and key.isdigit():
-                value = value[int(key)] if int(key) < len(value) else None
-            else:
-                value = None
-                break
-        
-        # Apply converter if provided
-        if output_field in converters:
-            value = converters[output_field](value)
-        elif value is not None:
-            # Default: try to convert to float if numeric
-            try:
-                value = float(value)
-            except (ValueError, TypeError):
-                pass
-        
-        result[output_field] = value
-    
-    return result
-

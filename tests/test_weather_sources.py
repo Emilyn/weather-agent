@@ -43,11 +43,6 @@ def open_meteo_response():
 def wttr_response():
     # 3-hourly, starting at local midnight
     return {
-        # 06:12 local = 04:12 UTC, so wttr.in alone reveals the +2h offset
-        'current_condition': [{
-            'localObsDateTime': '2026-09-23 06:12 AM',
-            'observation_time': '04:12 AM',
-        }],
         'weather': [{
             'date': '2026-09-23',
             'hourly': [
@@ -66,67 +61,46 @@ def wttr_response():
     }
 
 
-def seven_timer_response():
-    # 3-hourly offsets from a UTC init time (00 UTC = 02:00 local)
-    return {
-        'init': '2026092300',
-        'dataseries': [
-            {
-                'timepoint': tp,
-                'temp2m': 10 + (2 + tp) % 24,
-                'weather': 'clearday',
-                'wind10m': {'direction': 'N', 'speed': 3},
-                'rh2m': '60%',
-            }
-            for tp in range(3, 25, 3)
-        ]
-    }
-
-
 def fake_fetch(url, params=None, headers=None, method='GET', timeout=10,
                source_name="API", json_data=None):
     return {
         'Open-Meteo': open_meteo_response,
         'wttr.in': wttr_response,
-        '7Timer': seven_timer_response,
     }[source_name]()
 
 
-class AlignToHoursTest(unittest.TestCase):
-    def test_picks_nearest_point_within_tolerance(self):
-        items = [{'time': datetime(2026, 9, 23, h)} for h in (3, 6, 9)]
-        targets = [datetime(2026, 9, 23, h) for h in (6, 7, 8)]
-        aligned = WeatherSources._align_to_hours(items, targets)
-        self.assertEqual([a['time'].hour for a in aligned], [6, 6, 9])
+def point(hour, temperature, condition='Clear'):
+    return {'time': datetime(2026, 9, 23, hour), 'temperature': temperature, 'precipitation': 0.0,
+            'rain': 0.0, 'snow': 0.0, 'wind_speed': 3.0, 'humidity': 60.0, 'condition': condition}
 
-    def test_returns_none_outside_tolerance(self):
-        items = [{'time': datetime(2026, 9, 23, 0)}]
-        aligned = WeatherSources._align_to_hours(items, [datetime(2026, 9, 23, 6)])
+
+class AlignToHoursTest(unittest.TestCase):
+    def test_exact_match_used_as_is(self):
+        aligned = WeatherSources._align_to_hours([point(6, 12.0)], [datetime(2026, 9, 23, 6)])
+        self.assertEqual(aligned[0]['temperature'], 12.0)
+
+    def test_interpolates_between_3_hourly_points(self):
+        # Real Stockholm case: wttr.in 18:00 = 13°C, 21:00 = 10°C. Taking the nearest
+        # point at 20:00 would report 10°C; interpolation gives 11°C
+        items = [point(18, 13.0, 'Sunny'), point(21, 10.0, 'Clear')]
+        targets = [datetime(2026, 9, 23, h) for h in (19, 20)]
+        aligned = WeatherSources._align_to_hours(items, targets)
+        self.assertAlmostEqual(aligned[0]['temperature'], 12.0)
+        self.assertAlmostEqual(aligned[1]['temperature'], 11.0)
+        self.assertEqual(aligned[0]['condition'], 'Sunny')
+        self.assertEqual(aligned[1]['condition'], 'Clear')
+        self.assertEqual(aligned[1]['time'], datetime(2026, 9, 23, 20))
+
+    def test_no_interpolation_across_large_gaps(self):
+        items = [point(0, 5.0), point(12, 15.0)]
+        self.assertEqual(WeatherSources._align_to_hours(items, [datetime(2026, 9, 23, 6)]), [None])
+
+    def test_returns_none_outside_coverage(self):
+        aligned = WeatherSources._align_to_hours([point(21, 10.0)], [datetime(2026, 9, 23, 23)])
         self.assertEqual(aligned, [None])
 
 
-def fetch_without_open_meteo(url, params=None, headers=None, method='GET', timeout=10,
-                             source_name="API", json_data=None):
-    if source_name == 'Open-Meteo':
-        return None  # simulate an outage
-    return fake_fetch(url, params, headers, method, timeout, source_name, json_data)
-
-
 class UtcOffsetTest(unittest.TestCase):
-    def test_offset_from_wttr(self):
-        self.assertEqual(WeatherSources._utc_offset_from_wttr(wttr_response()), timedelta(hours=2))
-
-    def test_offset_from_wttr_across_midnight(self):
-        data = {'current_condition': [{'localObsDateTime': '2026-09-23 12:30 AM',
-                                       'observation_time': '10:30 PM'}]}
-        self.assertEqual(WeatherSources._utc_offset_from_wttr(data), timedelta(hours=2))
-        data = {'current_condition': [{'localObsDateTime': '2026-09-22 08:00 PM',
-                                       'observation_time': '03:00 AM'}]}
-        self.assertEqual(WeatherSources._utc_offset_from_wttr(data), timedelta(hours=-7))
-
-    def test_offset_from_wttr_missing_data(self):
-        self.assertIsNone(WeatherSources._utc_offset_from_wttr({}))
-
     def test_longitude_estimate_when_no_source_reports_offset(self):
         sources = WeatherSources(lat=40.7, lon=-74.0)
         sources._estimate_utc_offset_from_longitude()
@@ -134,31 +108,32 @@ class UtcOffsetTest(unittest.TestCase):
 
 
 class AggregateWeatherDataTest(unittest.TestCase):
-    @patch('weather_sources.fetch_api_data', side_effect=fetch_without_open_meteo)
-    def test_works_without_open_meteo_or_api_keys(self, _):
-        # Only keyless sources besides Open-Meteo: wttr.in must supply the offset for 7Timer
-        sources = WeatherSources(lat=48.85, lon=2.35)
-        with patch.object(WeatherSources, '_location_now', return_value=LOCAL_NOW):
-            data = sources.aggregate_weather_data()
-        self.assertEqual(set(data.sources_used), {'wttr.in', '7Timer'})
-        self.assertEqual(sources.utc_offset, timedelta(hours=2))
-        self.assertEqual(data.hourly_data[0]['time'], '2026-09-23 06:00')
-
     @patch('weather_sources.fetch_api_data', side_effect=fake_fetch)
     def test_sources_are_aligned_by_local_time(self, _):
         sources = WeatherSources(lat=48.85, lon=2.35)
         with patch.object(WeatherSources, '_location_now', return_value=LOCAL_NOW):
             data = sources.aggregate_weather_data()
 
-        self.assertEqual(set(data.sources_used), {'Open-Meteo', 'wttr.in', '7Timer'})
-        self.assertEqual(len(data.hourly_data), 10)
+        self.assertEqual(set(data.sources_used), {'Open-Meteo', 'wttr.in'})
 
         first = data.hourly_data[0]
         self.assertEqual(first['time'], '2026-09-23 06:00')
         # Open-Meteo and wttr.in both report 16°C at 06:00 local; index-based
         # alignment would have mixed in wttr.in's midnight reading (10°C)
         self.assertEqual(first['temperature'], 16.0)
-        self.assertEqual(data.hourly_data[9]['time'], '2026-09-23 15:00')
+        # 20:00 falls between wttr.in's 18:00 and 21:00 points; interpolated, both sources agree
+        at_20 = next(h for h in data.hourly_data if h['time'].endswith('20:00'))
+        self.assertEqual(at_20['temperature'], 30.0)
+        self.assertEqual(at_20['sources_count'], 2)
+
+    @patch('weather_sources.fetch_api_data', side_effect=fake_fetch)
+    def test_morning_run_covers_the_whole_day(self, _):
+        sources = WeatherSources(lat=59.33, lon=18.07)
+        with patch.object(WeatherSources, '_location_now', return_value=LOCAL_NOW):
+            data = sources.aggregate_weather_data()
+        # 06:00 through 23:00
+        self.assertEqual(len(data.hourly_data), 18)
+        self.assertEqual(data.hourly_data[-1]['time'], '2026-09-23 23:00')
 
     @patch('weather_sources.fetch_api_data', side_effect=fake_fetch)
     def test_open_meteo_wind_converted_to_ms(self, _):
@@ -168,23 +143,12 @@ class AggregateWeatherDataTest(unittest.TestCase):
         self.assertEqual(sources.utc_offset, timedelta(hours=2))
 
     @patch('weather_sources.fetch_api_data', side_effect=fake_fetch)
-    def test_7timer_times_converted_from_utc(self, _):
-        sources = WeatherSources(lat=48.85, lon=2.35)
-        sources.utc_offset = timedelta(hours=2)
-        items = sources.fetch_7timer()
-        self.assertEqual(items[0]['time'], datetime(2026, 9, 23, 5))
-        self.assertAlmostEqual(items[0]['wind_speed'], 5.7)
-        self.assertEqual(items[0]['humidity'], 60.0)
-
-    @patch('weather_sources.fetch_api_data', side_effect=fake_fetch)
-    def test_late_run_still_has_full_forecast(self, _):
+    def test_late_run_covers_rest_of_day(self, _):
         sources = WeatherSources(lat=48.85, lon=2.35)
         late = datetime(2026, 9, 23, 20, 0)
         with patch.object(WeatherSources, '_location_now', return_value=late):
             data = sources.aggregate_weather_data()
-        # Open-Meteo now requests 2 days, so a 20:00 run still gets 10 hours
-        self.assertEqual(len(data.hourly_data), 10)
-        self.assertEqual(data.hourly_data[-1]['time'], '2026-09-24 05:00')
+        self.assertEqual([h['time'][11:] for h in data.hourly_data], ['20:00', '21:00', '22:00', '23:00'])
 
 
 if __name__ == '__main__':

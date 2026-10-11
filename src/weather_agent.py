@@ -68,12 +68,11 @@ def main():
     weatherapi_key = os.getenv('WEATHERAPI_KEY')
     openweather_key = os.getenv('OPENWEATHER_KEY')
     groq_api_key = os.getenv('GROQ_API_KEY')
-    hf_api_key = os.getenv('HUGGINGFACE_API_KEY')
     github_token = os.getenv('GITHUB_TOKEN')
     
     # Validate at least one AI credential is present
-    if not github_token and not groq_api_key and not hf_api_key:
-        print_error("At least one AI credential is required (GITHUB_TOKEN, GROQ_API_KEY or HUGGINGFACE_API_KEY)")
+    if not github_token and not groq_api_key:
+        print_error("At least one AI credential is required (GITHUB_TOKEN or GROQ_API_KEY)")
         sys.exit(1)
     
     print(f"📍 Location: {lat}, {lon}")
@@ -119,7 +118,6 @@ def main():
     try:
         ai_recommender = AIRecommender(
             groq_api_key=groq_api_key,
-            hf_api_key=hf_api_key,
             github_token=github_token
         )
         
@@ -128,8 +126,6 @@ def main():
             providers.append(f"GitHub Models ({ai_recommender.github_model})")
         if groq_api_key:
             providers.append(f"Groq ({ai_recommender.groq_model})")
-        if hf_api_key:
-            providers.append("Hugging Face (Mistral-7B)")
         print(f"   AI providers, in order: {' → '.join(providers)}")
         
         # Generate with reflection pattern (iterative refinement)

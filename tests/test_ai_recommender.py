@@ -27,16 +27,16 @@ def failing(*args, **kwargs):
 
 
 class ProviderFallbackTest(unittest.TestCase):
-    def test_falls_back_to_huggingface_when_groq_fails(self):
-        rec = AIRecommender(groq_api_key='g', hf_api_key='h')
-        rec._generate_with_groq = failing
-        rec._generate_with_huggingface = lambda *args: "Wear a raincoat."
+    def test_falls_back_to_groq_when_github_models_fails(self):
+        rec = AIRecommender(groq_api_key='g', github_token='t')
+        rec._generate_with_github_models = failing
+        rec._generate_with_groq = lambda *args: "Wear a raincoat."
         self.assertEqual(rec.generate_recommendation(WEATHER), "Wear a raincoat.")
 
     def test_rule_based_when_all_providers_fail(self):
-        rec = AIRecommender(groq_api_key='g', hf_api_key='h')
+        rec = AIRecommender(groq_api_key='g', github_token='t')
+        rec._generate_with_github_models = failing
         rec._generate_with_groq = failing
-        rec._generate_with_huggingface = failing
         result = rec.generate_recommendation(WEATHER)
         self.assertIn("jacket", result)
         self.assertIn("umbrella", result)
@@ -94,13 +94,16 @@ class GroqModelFallbackTest(unittest.TestCase):
 
 
 class FakeResponse:
-    def __init__(self, status_code, body):
+    def __init__(self, status_code, body, content_type='application/json'):
         self.status_code = status_code
         self.ok = status_code < 400
         self.body = body
         self.text = str(body)
+        self.headers = {'Content-Type': content_type}
 
     def json(self):
+        if not isinstance(self.body, dict):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
         return self.body
 
 
@@ -153,6 +156,14 @@ class GitHubModelsTest(unittest.TestCase):
         catalog.assert_not_called()
         self.assertEqual(rec.github_model, 'openai/o3-mini')
 
+    @patch.dict(os.environ, {}, clear=True)
+    @patch('ai_recommender.requests.post', return_value=FakeResponse(200, 'OK', 'text/plain'))
+    def test_non_json_response_reports_what_came_back(self, _):
+        # Seen in production: HTTP 200 with a plain-text "OK" body
+        rec = AIRecommender(github_token='t')
+        with self.assertRaisesRegex(Exception, "HTTP 200, text/plain.*'OK'"):
+            rec._generate_with_github_models(WEATHER)
+
     def test_choose_github_model(self):
         self.assertEqual(choose_github_model(['meta/llama-4', 'openai/gpt-5-mini']), 'openai/gpt-5-mini')
         self.assertEqual(choose_github_model(['meta/llama-4']), 'meta/llama-4')
@@ -161,6 +172,9 @@ class GitHubModelsTest(unittest.TestCase):
 class ChooseGroqModelTest(unittest.TestCase):
     def test_preference_order(self):
         self.assertEqual(choose_groq_model(['qwen-3', 'llama-3.3-70b']), 'llama-3.3-70b')
+        # Seen in production: with no Llama models left, alphabetical order picked allam-2-7b
+        self.assertEqual(choose_groq_model(['allam-2-7b', 'openai/gpt-oss-20b', 'qwen/qwen3-32b']),
+                         'openai/gpt-oss-20b')
         self.assertEqual(choose_groq_model(['qwen-3']), 'qwen-3')
         self.assertIsNone(choose_groq_model([]))
 

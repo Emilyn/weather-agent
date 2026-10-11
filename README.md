@@ -4,9 +4,9 @@ A completely free, automated weather notification system that runs daily via Git
 
 ## ✨ Features
 
-- **Multiple Weather Sources**: Aggregates data from 5 free weather APIs for maximum reliability
+- **Multiple Weather Sources**: Aggregates data from 4 free weather APIs for maximum reliability
 - **Comprehensive Weather Data**: Tracks temperature, rain, snow, wind speed, and humidity
-- **AI-Powered Recommendations**: Uses free GitHub Models (no key needed in Actions), with optional Groq/Hugging Face fallbacks and self-reflection for quality
+- **AI-Powered Recommendations**: Uses free GitHub Models (no key needed in Actions), with an optional Groq fallback and self-reflection for quality
 - **Smart Aggregation**: Calculates consensus weather data using weighted medians from multiple sources
 - **Self-Reflection Pattern**: Agent evaluates and improves its own outputs iteratively
 - **Push Notifications**: Sends formatted notifications to your phone via Ntfy.sh
@@ -22,7 +22,7 @@ Before setting up, you'll need:
 3. A smartphone with Ntfy.sh app installed
 4. Optional API keys (all free):
    - WeatherAPI.com and OpenWeatherMap keys for more data sources
-   - Groq or Hugging Face keys as backup AI providers (AI uses GitHub Models by default, no key needed)
+   - Groq key as a backup AI provider (AI uses GitHub Models by default, no key needed)
 
 ## 🚀 Quick Start
 
@@ -47,7 +47,7 @@ Example: Paris, France = `48.8566, 2.3522`
 
 #### AI: GitHub Models (Default, No Setup)
 
-The workflow uses [GitHub Models](https://github.com/marketplace/models) through the built-in `GITHUB_TOKEN`, so there's nothing to sign up for. The keys below are optional backups.
+The workflow uses [GitHub Models](https://github.com/marketplace/models) through the built-in `GITHUB_TOKEN`, so there's nothing to sign up for. The Groq key below is an optional backup.
 
 **Optional backup: Groq**
 1. Go to [console.groq.com](https://console.groq.com)
@@ -55,13 +55,6 @@ The workflow uses [GitHub Models](https://github.com/marketplace/models) through
 3. Navigate to API Keys
 4. Create a new API key
 5. Free tier: 14,400 requests/day
-
-**Optional backup: Hugging Face**
-1. Go to [huggingface.co](https://huggingface.co)
-2. Sign up for free account
-3. Go to Settings → Access Tokens
-4. Create a new token with "Read" permission
-5. Free tier: Generous limits
 
 #### Optional: Additional Weather APIs
 
@@ -113,11 +106,10 @@ Follow these steps to add your API keys and configuration as GitHub Secrets:
 | `LOCATION_LON` | Your longitude | `2.3522` | ✅ Yes |
 | `NTFY_TOPIC` | Your unique Ntfy.sh topic | `weather_john_xyz789` | ✅ Yes |
 | `GROQ_API_KEY` | Groq API key | `gsk_...` | Optional fallback |
-| `HUGGINGFACE_API_KEY` | Hugging Face token | `hf_...` | Optional fallback |
 | `WEATHERAPI_KEY` | WeatherAPI.com key | `abc123...` | ⭐ Recommended |
 | `OPENWEATHER_KEY` | OpenWeatherMap key | `xyz789...` | ⭐ Recommended |
 
-**Note**: No AI key is needed when running in GitHub Actions: the workflow uses **GitHub Models** (free) through the built-in `GITHUB_TOKEN`. Groq and Hugging Face keys are optional fallbacks, and if every AI provider fails the agent still sends rule-based clothing advice. The optional weather API keys improve accuracy but the agent will work without them.
+**Note**: No AI key is needed when running in GitHub Actions: the workflow uses **GitHub Models** (free) through the built-in `GITHUB_TOKEN`. A Groq key is an optional fallback, and if every AI provider fails the agent still sends rule-based clothing advice. The optional weather API keys improve accuracy but the agent will work without them.
 
 **Running locally**: set `GITHUB_TOKEN` to a GitHub personal access token with the `models:read` permission (or run `export GITHUB_TOKEN=$(gh auth token)`).
 
@@ -129,7 +121,7 @@ Follow these steps to add your API keys and configuration as GitHub Secrets:
 
 1. Go to the **Actions** tab in your repository (top navigation bar)
 2. If you see a message about enabling workflows, click **"I understand my workflows, go ahead and enable them"**
-3. The workflow will now run automatically every day at 04:30 UTC
+3. The workflow will now run automatically every morning (see [Reliable 06:00 delivery](#reliable-0600-delivery) below)
 
 ### 7. Run GitHub Actions (Manual Testing)
 
@@ -162,37 +154,48 @@ After triggering a run:
 #### Option C: Automatic Scheduled Runs
 
 Once enabled, the workflow runs automatically:
-- **Schedule**: Every day at 04:30 UTC (05:30 GMT+1 / 06:30 GMT+2)
-- **No action needed**: Just wait for your morning notification!
+- **Schedule**: 06:00 Stockholm time by default, adjusted automatically for summer/winter time
+- **Once per day**: extra triggers on the same day are skipped
 - **Check history**: Go to Actions tab to see all past runs
+
+#### Reliable 06:00 Delivery
+
+GitHub's built-in scheduler often starts runs late, from a few minutes up to several hours, and it pauses schedules after 60 days without repository activity. The workflow keeps GitHub's schedule as a backup, but for an on-time notification use a free external scheduler to start the run:
+
+1. Create a fine-grained personal access token: GitHub → Settings → Developer settings → Fine-grained tokens. Give it access to this repository only, with the **Actions: Read and write** permission.
+2. Sign up at [cron-job.org](https://cron-job.org) (free) and create a cron job:
+   - **URL**: `https://api.github.com/repos/<your-user>/weather-agent/actions/workflows/weather-notification.yml/dispatches`
+   - **Schedule**: every day at 06:00, time zone **Europe/Stockholm**
+   - **Advanced → Request method**: `POST`
+   - **Headers**: `Authorization: Bearer <your token>`, `Accept: application/vnd.github+json`
+   - **Request body**: `{"ref": "main", "inputs": {"trigger": "scheduler"}}`
+3. Use **Test run** in cron-job.org and check that a run appears in the Actions tab.
+
+Runs started this way, and GitHub's backup schedule, send at most one notification per day. Manual runs from the Actions tab always send.
 
 ## 📱 What You'll Receive
 
 Every morning at 6 AM, you'll get a notification like this:
 
 ```
+🌤️ Today: 9°C – 17°C
+
 🌡️ Temperature
-• Low: 12.0°C
-• High: 18.0°C
-• Feels like: 15.5°C
-  (Range: 12.0°C - 18.0°C)
+• 8.6°C at 06:00 → 16.6°C at 16:00
+• Feels like: 8.0°C → 16.6°C
 
 🌧️ Rain
-• ✅ No rain expected
-
-❄️ Snow
-• ✅ No snow expected
+• ⚠️ Expected · 2.4mm total · Peak: 0.9mm/h
+• At: 14:00, 15:00, 16:00
 
 🌬️ Wind
-• ✅ Light winds
-• Speed: 3.5 m/s (avg)
-• Peak: 5.2 m/s
+• ✅ Light · 1.5 m/s avg · 1.7 m/s peak
 
+─────────────────
 👔 Recommendation
-Based on the forecast, I recommend wearing a light 
-jacket or sweater. The temperature will be mild but 
-may feel cool in the morning. Perfect day for outdoor 
-activities!
+Cool morning, mild afternoon: wear a light jacket
+over a sweater and bring an umbrella for the
+afternoon showers.
 
 Have a great day!
 ```
@@ -201,26 +204,15 @@ Have a great day!
 
 ### Change Notification Time
 
-Edit `.github/workflows/weather-notification.yml`:
+1. Set the time in your external scheduler (see [Reliable 06:00 delivery](#reliable-0600-delivery)).
+2. Add repository **variables** (Settings → Secrets and variables → Actions → Variables tab):
+   - `NOTIFY_TIME`: local send time, e.g. `07:30` (default `06:00`)
+   - `NOTIFY_TIMEZONE`: e.g. `Europe/Paris` (default `Europe/Stockholm`)
+3. Update the backup `cron` lines in `.github/workflows/weather-notification.yml` so they fire at your local time in both summer and winter (cron uses UTC). Use [crontab.guru](https://crontab.guru/) to help with cron syntax.
 
-```yaml
-schedule:
-  # Change '0 5' to your desired UTC time
-  # Current: 5 AM UTC = 6 AM GMT+1
-  - cron: '0 5 * * *'
-```
+### Forecast Period
 
-**Time Zone Conversion Examples**:
-- 6 AM GMT+1 (Paris) = `0 5` (5 AM UTC)
-- 7 AM EST (New York) = `0 12` (12 PM UTC)
-- 8 AM PST (Los Angeles) = `0 16` (4 PM UTC)
-- 6 AM JST (Tokyo) = `0 21` (9 PM UTC previous day)
-
-Use [crontab.guru](https://crontab.guru/) to help with cron syntax.
-
-### Adjust Forecast Hours
-
-Edit `src/weather_sources.py` to change from 10 hours to your preference.
+The forecast covers every hour from when the agent runs until midnight, so a 06:00 notification covers the whole day.
 
 ### Customize Notification Format
 
@@ -240,14 +232,14 @@ cd src && python weather_agent.py
 ## 📊 How It Works
 
 1. **GitHub Actions** triggers the workflow daily at your scheduled time
-2. **Weather Sources** fetches data from 5 different APIs simultaneously
+2. **Weather Sources** fetches data from 4 different APIs and aligns them to the same local hours
 3. **Aggregation** calculates weighted median values for temperature, precipitation, wind, etc.
 4. **Reflection Engine** evaluates data quality and identifies issues
 5. **AI Recommender** generates clothing advice with iterative refinement
 6. **Reflection Engine** evaluates recommendation quality and refines if needed
 7. **Ntfy.sh** delivers the formatted notification to your phone
 
-See [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md) for architecture details and [docs/REFLECTION_PATTERN.md](docs/REFLECTION_PATTERN.md) for reflection pattern documentation.
+See [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md) for architecture details.
 
 
 ## 🛠️ Troubleshooting
@@ -267,7 +259,7 @@ See [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md) for architecture details and [docs/RE
 
 ### AI Recommendation Failed
 
-- Verify your Groq or Hugging Face API key is correct
+- Check the Actions log for the GitHub Models or Groq error message
 - Check API rate limits haven't been exceeded
 - The agent will fall back to rule-based recommendations
 
@@ -315,16 +307,17 @@ See [docs/DEV_GUIDE.md](docs/DEV_GUIDE.md) for architecture details and [docs/RE
 weather-agent/
 ├── .github/
 │   └── workflows/
-│       └── weather-notification.yml  # GitHub Actions workflow
+│       ├── weather-notification.yml  # Daily notification workflow
+│       └── tests.yml                 # Unit tests on push / pull request
 ├── src/
 │   ├── weather_agent.py             # Main orchestrator
 │   ├── weather_sources.py           # Multi-source weather fetching
 │   ├── ai_recommender.py            # AI clothing recommendations
 │   ├── reflection_engine.py         # Self-evaluation and refinement
 │   └── utils.py                     # Shared utilities (DRY principles)
+├── tests/                           # Unit tests (python -m unittest discover tests)
 ├── docs/
-│   ├── DEV_GUIDE.md                 # Development guide & coding patterns
-│   └── REFLECTION_PATTERN.md        # Reflection pattern documentation
+│   └── DEV_GUIDE.md                 # Development guide & coding patterns
 ├── requirements.txt                  # Python dependencies
 └── README.md                        # This file
 ```
@@ -343,8 +336,8 @@ This project is open source and available under the MIT License.
 
 ## 🙏 Acknowledgments
 
-- Weather data from Open-Meteo, WeatherAPI.com, OpenWeatherMap, 7Timer, and wttr.in
-- AI powered by Groq and Hugging Face
+- Weather data from Open-Meteo, WeatherAPI.com, OpenWeatherMap, and wttr.in
+- AI powered by GitHub Models and Groq
 - Notifications via Ntfy.sh
 - Automated by GitHub Actions
 

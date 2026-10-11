@@ -1,16 +1,15 @@
 """
 AI-powered clothing recommendation engine.
 Uses free AI APIs: GitHub Models (free with any GitHub account, works with the
-GitHub Actions GITHUB_TOKEN), with Groq and Hugging Face as optional fallbacks.
+GitHub Actions GITHUB_TOKEN), with Groq as an optional fallback.
 Falls back to rule-based advice if every provider fails.
 """
 
 import os
 import requests
 from typing import Dict, List, Optional
-import json
 from utils import fetch_api_data
-from reflection_engine import ReflectionEngine, ReflectionResult
+from reflection_engine import ReflectionEngine
 
 
 # Override with the GITHUB_MODELS_MODEL env var; if the model is retired the
@@ -31,19 +30,17 @@ NON_CHAT_MODEL_MARKERS = ("whisper", "tts", "guard", "playai", "orpheus", "promp
 
 
 class AIRecommender:
-    """Generate clothing recommendations using AI (GitHub Models, Groq or Hugging Face)."""
+    """Generate clothing recommendations using AI (GitHub Models or Groq)."""
     
-    def __init__(self, groq_api_key: Optional[str] = None, hf_api_key: Optional[str] = None,
-                 github_token: Optional[str] = None):
+    def __init__(self, groq_api_key: Optional[str] = None, github_token: Optional[str] = None):
         self.github_token = github_token
         self.groq_api_key = groq_api_key
-        self.hf_api_key = hf_api_key
         self.github_model = os.getenv('GITHUB_MODELS_MODEL') or DEFAULT_GITHUB_MODEL
         self.groq_model = os.getenv('GROQ_MODEL') or DEFAULT_GROQ_MODEL
         
-        if not github_token and not groq_api_key and not hf_api_key:
+        if not github_token and not groq_api_key:
             raise ValueError(
-                "At least one AI credential is required: GITHUB_TOKEN, GROQ_API_KEY or HUGGINGFACE_API_KEY."
+                "At least one AI credential is required: GITHUB_TOKEN or GROQ_API_KEY."
             )
     
     def generate_recommendation(
@@ -122,7 +119,7 @@ class AIRecommender:
         """Build the chat prompt shared by the chat-completion providers."""
         weather_summary = self._format_weather_for_ai(weather_data)
         
-        base_prompt = f"""Based on the following 10-hour weather forecast, provide a concise clothing recommendation (2-3 sentences max).
+        base_prompt = f"""Based on the following forecast for the rest of today, provide a concise clothing recommendation (2-3 sentences max).
 Focus on practical advice about what to wear.
 
 Weather forecast:
@@ -169,7 +166,13 @@ Weather forecast:
         
         if not response.ok:
             raise Exception(f"GitHub Models error {response.status_code}: {response.text[:300]}")
-        return response.json()['choices'][0]['message']['content'].strip()
+        try:
+            return response.json()['choices'][0]['message']['content'].strip()
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise Exception(
+                f"GitHub Models returned an unexpected response (HTTP {response.status_code}, "
+                f"{response.headers.get('Content-Type', 'unknown type')}): {response.text[:200]!r}"
+            )
     
     def _post_github_models(self, messages: List[Dict]) -> requests.Response:
         return requests.post(
@@ -281,7 +284,7 @@ Weather forecast:
     ) -> str:
         """
         Generate a recommendation (optionally with reflection feedback), trying each
-        configured provider in turn: GitHub Models, Groq, then Hugging Face.
+        configured provider in turn: GitHub Models, then Groq.
         Raises RuntimeError if every provider fails.
         """
         providers = []
@@ -289,8 +292,6 @@ Weather forecast:
             providers.append(("GitHub Models", self._generate_with_github_models))
         if self.groq_api_key:
             providers.append(("Groq", self._generate_with_groq))
-        if self.hf_api_key:
-            providers.append(("Hugging Face", self._generate_with_huggingface))
         
         errors = []
         for index, (name, generate) in enumerate(providers):
@@ -334,62 +335,6 @@ Weather forecast:
             advice += " It will be windy."
         
         return advice
-    
-    def _generate_with_huggingface(
-        self,
-        weather_data: Dict,
-        feedback_issues: Optional[List[str]] = None,
-        feedback_suggestions: Optional[List[str]] = None
-    ) -> str:
-        """
-        Generate recommendation using Hugging Face Inference API.
-        
-        Args:
-            weather_data: Weather data dictionary
-            feedback_issues: Optional list of issues from reflection
-            feedback_suggestions: Optional list of suggestions from reflection
-        """
-        API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
-        headers = {"Authorization": f"Bearer {self.hf_api_key}"}
-        
-        weather_summary = self._format_weather_for_ai(weather_data)
-        
-        base_prompt = f"""<s>[INST] Based on this 10-hour weather forecast, provide a brief clothing recommendation (2-3 sentences):
-
-{weather_summary}"""
-        
-        if feedback_issues and feedback_suggestions:
-            feedback_text = "\n\nPrevious attempt had issues: " + ", ".join(feedback_issues[:2])
-            feedback_text += ". Please address: " + ", ".join(feedback_suggestions[:2])
-            prompt = base_prompt + feedback_text + "\n\nWhat should I wear? [/INST]"
-        else:
-            prompt = base_prompt + "\n\nWhat should I wear? [/INST]"
-
-        payload = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": 150,
-                "temperature": 0.7,
-                "return_full_text": False
-            }
-        }
-        
-        result = fetch_api_data(
-            url=API_URL,
-            headers=headers,
-            method='POST',
-            json_data=payload,
-            timeout=30,
-            source_name="Hugging Face"
-        )
-        
-        if not result:
-            raise Exception("Failed to get response from Hugging Face API")
-        
-        if isinstance(result, list) and len(result) > 0:
-            return result[0]['generated_text'].strip()
-        
-        raise Exception("Unexpected response format from Hugging Face")
     
     def _format_weather_for_ai(self, weather_data: Dict) -> str:
         """Format weather data for AI prompt."""
@@ -483,8 +428,10 @@ Humidity: {hourly[0]['humidity']}%"""
         will_rain = total_rain > 0.5
         will_snow = total_snow > 0.5
 
-        rain_hours = [i for i, h in enumerate(hourly) if h.get('rain', 0) > 0.5]
-        snow_hours = [i for i, h in enumerate(hourly) if h.get('snow', 0) > 0.5]
+        rain_hours = [clock_time(h) for h in hourly if h.get('rain', 0) > 0.5]
+        snow_hours = [clock_time(h) for h in hourly if h.get('snow', 0) > 0.5]
+        coldest = min(hourly, key=lambda h: h['temperature'])
+        warmest = max(hourly, key=lambda h: h['temperature'])
 
         # Wind analysis
         wind_speeds = [h['wind_speed'] for h in hourly]
@@ -497,13 +444,13 @@ Humidity: {hourly[0]['humidity']}%"""
 
         # Temperature section
         message += "🌡️ Temperature\n"
-        message += f"• {min_temp:.1f}°C → {max_temp:.1f}°C\n"
+        message += f"• {min_temp:.1f}°C at {clock_time(coldest)} → {max_temp:.1f}°C at {clock_time(warmest)}\n"
         message += f"• Feels like: {min_feels_like:.1f}°C → {max_feels_like:.1f}°C\n\n"
 
         # Rain section
         message += "🌧️ Rain\n"
         if will_rain:
-            hours_str = ", ".join([f"+{h}h" for h in rain_hours[:5]])
+            hours_str = ", ".join(rain_hours[:5])
             if len(rain_hours) > 5:
                 hours_str += f" (+{len(rain_hours)-5} more)"
             if rain_hours:
@@ -518,7 +465,7 @@ Humidity: {hourly[0]['humidity']}%"""
         # Snow section — only shown when relevant
         if will_snow:
             message += "❄️ Snow\n"
-            hours_str = ", ".join([f"+{h}h" for h in snow_hours[:5]])
+            hours_str = ", ".join(snow_hours[:5])
             if len(snow_hours) > 5:
                 hours_str += f" (+{len(snow_hours)-5} more)"
             if snow_hours:
@@ -543,11 +490,21 @@ Humidity: {hourly[0]['humidity']}%"""
         return message
 
 
+def clock_time(hour: Dict) -> str:
+    """Local clock time ("14:00") of an aggregated forecast hour."""
+    if 'time' in hour:
+        return hour['time'][11:16]
+    return f"+{hour.get('hour', 0)}h"
+
+
 def choose_groq_model(model_ids: List[str]) -> Optional[str]:
-    """Choose the best replacement model: fast Llama, then any Llama, then anything else."""
+    """Choose the best replacement model: fast Llama, any Llama, other general-purpose families, then anything."""
     preferences = [
         lambda m: 'llama' in m and 'instant' in m,
         lambda m: 'llama' in m,
+        lambda m: 'gpt-oss' in m,
+        lambda m: 'qwen' in m,
+        lambda m: 'gemma' in m,
         lambda m: True,
     ]
     for matches in preferences:
@@ -580,16 +537,19 @@ if __name__ == "__main__":
     # Test the AI recommender
     sample_weather = {
         'hourly_data': [
-            {'hour': i, 'temperature': 15 + i*0.5, 'precipitation': 0.1 if i < 3 else 0,
-             'wind_speed': 5.0, 'humidity': 70, 'condition': 'Partly cloudy'}
-            for i in range(10)
+            {'hour': i, 'time': f"2026-01-01 {6 + i:02d}:00", 'temperature': 15 + i*0.5,
+             'precipitation': 0.1 if i < 3 else 0, 'wind_speed': 5.0, 'humidity': 70,
+             'condition': 'Partly cloudy'}
+            for i in range(18)
         ],
         'sources_used': ['Open-Meteo', 'WeatherAPI', 'wttr.in'],
         'reliability_score': 0.6
     }
     
-    groq_key = os.getenv('GROQ_API_KEY')
-    recommender = AIRecommender(groq_api_key=groq_key)
+    recommender = AIRecommender(
+        groq_api_key=os.getenv('GROQ_API_KEY'),
+        github_token=os.getenv('GITHUB_TOKEN')
+    )
     
     recommendation = recommender.generate_recommendation(sample_weather)
     print("Recommendation:", recommendation)
